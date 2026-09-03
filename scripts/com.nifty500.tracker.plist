@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd schedule for the nightly refresh.
+
+  Install:
+    cp scripts/com.nifty500.tracker.plist ~/Library/LaunchAgents/
+    launchctl load  ~/Library/LaunchAgents/com.nifty500.tracker.plist
+    launchctl start com.nifty500.tracker          # run once now, to check
+
+  Inspect / remove:
+    launchctl list | grep nifty500
+    launchctl unload ~/Library/LaunchAgents/com.nifty500.tracker.plist
+
+  Scheduled for 19:15 local time. NSE closes at 15:30 IST and the bhavcopy is
+  published shortly after; running well past that leaves room for a late file
+  without needing a retry loop. RunAtLoad is deliberately false — loading the
+  agent should not kick off a full sweep in the middle of the day.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nifty500.tracker</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/avinashsingh/Documents/nifty500-tracker/scripts/nightly.sh</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>19</integer>
+    <key>Minute</key><integer>15</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/avinashsingh/Documents/nifty500-tracker/data/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/avinashsingh/Documents/nifty500-tracker/data/logs/launchd.err.log</string>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/avinashsingh/Documents/nifty500-tracker</string>
+</dict>
+</plist>

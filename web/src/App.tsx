@@ -3,6 +3,7 @@ import { HashRouter, Link, Route, Routes } from 'react-router-dom'
 import { TriangleAlert } from 'lucide-react'
 import type { ScreenerRow, ScreenerSnapshot } from './types'
 import { isConfigured } from './lib/supabase'
+import { Portfolio } from './pages/Portfolio'
 import { Screener } from './pages/Screener'
 import { StockDetail } from './pages/StockDetail'
 
@@ -32,11 +33,19 @@ export default function App() {
       <div className="mx-auto max-w-6xl px-6 py-10">
         <header className="mb-8">
           <p className="font-mono text-xs uppercase tracking-[0.15em] text-slate-500">
-            Phase 5 &middot; screener
+            Phase 7 &middot; complete
           </p>
-          <Link to="/" className="mt-2 block text-3xl font-bold tracking-tight hover:opacity-80">
-            Nifty 500 Conviction Tracker
-          </Link>
+          <div className="mt-2 flex flex-wrap items-baseline gap-x-4">
+            <Link to="/" className="text-3xl font-bold tracking-tight hover:opacity-80">
+              Nifty 500 Conviction Tracker
+            </Link>
+            <Link
+              to="/portfolio"
+              className="text-sm text-slate-500 underline underline-offset-4 hover:text-slate-900 dark:hover:text-slate-100"
+            >
+              Positions &amp; alerts
+            </Link>
+          </div>
           <p className="mt-2 max-w-2xl text-slate-600 dark:text-slate-400">
             Four scores. <strong>Q</strong> and <strong>V</strong> judge the business;{' '}
             <strong>T-M</strong> rewards a stock making new highs and <strong>T-S</strong>{' '}
@@ -66,6 +75,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Screener rows={rows} asOf={asOf} />} />
             <Route path="/stock/:symbol" element={<StockDetail rows={rows} />} />
+            <Route path="/portfolio" element={<Portfolio />} />
           </Routes>
         )}
       </div>

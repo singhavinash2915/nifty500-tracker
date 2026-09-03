@@ -90,3 +90,52 @@ export interface Weights {
 }
 
 export const DEFAULT_WEIGHTS: Weights = { quality: 45, value: 20, technical: 35 }
+
+export interface Position {
+  id: number | null
+  symbol: string
+  entry_date: string | null
+  entry_price: number
+  quantity: number
+  stop_price: number | null
+  target_price: number | null
+  thesis: string | null
+  setup: string | null
+  close: number | null
+  return_pct?: number
+  pnl?: number
+  value?: number
+  /** Negative means the stop is already breached. */
+  stop_distance_pct?: number
+  /** What this position can still lose from here. */
+  risk_remaining?: number
+  to_target_pct?: number
+  blended?: number | null
+  decile?: number | null
+  failed_gates?: string[]
+  thesis_intact?: boolean
+}
+
+export interface PositionsFile {
+  positions: Position[]
+  totals: {
+    positions?: number
+    invested?: number
+    value?: number
+    pnl?: number
+    return_pct?: number | null
+    risk_remaining?: number
+    thesis_broken?: number
+  }
+}
+
+export type Severity = 'critical' | 'action' | 'info'
+
+export interface AlertRow {
+  symbol: string
+  date: string
+  rule: string
+  message: string
+  payload: { severity?: Severity; [key: string]: unknown }
+  seen: boolean
+}

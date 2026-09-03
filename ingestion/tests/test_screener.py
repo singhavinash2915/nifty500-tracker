@@ -287,20 +287,28 @@ def test_a_lender_is_detected_from_either_signal():
     assert not is_lender({"company_type": "general", "sector": "Chemicals"})
 
 
-def test_the_snapshot_refuses_to_serialise_nan():
+def test_the_snapshot_never_emits_nan():
     """json.dumps writes a bare NaN, which JSON.parse rejects — the page then
-    renders empty with only a console error to show for it."""
-    import pytest as _pytest
+    renders empty with only a console error to show for it.
+
+    An earlier version raised on NaN instead of cleaning it, on the theory that
+    failing loudly beats failing quietly. That was wrong for this payload: a
+    NaN here means the company simply has no target price, which is ordinary
+    and is exactly what `null` is for in the types the front end already
+    declares. Refusing to export the whole universe because ITC has no target
+    would be the worse failure.
+    """
+    import json
+
     from n500.jobs.export_snapshot import _clean, serialise
 
     assert _clean(np.nan) is None
     assert _clean(None) is None
     assert _clean("financial") == "financial"
 
-    with _pytest.raises(ValueError):
-        serialise({"rows": [{"company_type": float("nan")}]})
-
-    assert serialise({"rows": [{"company_type": None}]})
+    text = serialise({"rows": [{"company_type": float("nan"), "pe": 12.5}]})
+    assert "NaN" not in text
+    assert json.loads(text)["rows"][0] == {"company_type": None, "pe": 12.5}
 
 
 # --- sanity assertions ----------------------------------------------------

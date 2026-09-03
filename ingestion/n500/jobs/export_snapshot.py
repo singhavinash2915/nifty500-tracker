@@ -18,6 +18,7 @@ import pandas as pd
 
 from ..config import REPO_ROOT
 from ..db import Db
+from ..serialise import dumps
 
 JOB = "export_snapshot"
 DEFAULT_OUT = REPO_ROOT / "web" / "public" / "scores-sample.json"
@@ -135,7 +136,7 @@ def build(db: Db) -> dict:
 
 def serialise(snapshot: dict) -> str:
     """Strict JSON, so an unclean value fails here rather than in the browser."""
-    return json.dumps(snapshot, allow_nan=False)
+    return dumps(snapshot)
 
 
 def build_details(db: Db, symbols: set[str]) -> dict[str, dict]:
