@@ -1,0 +1,5 @@
+supabase==2.31.0
+httpx==0.28.1
+python-dotenv==1.0.1
+pandas==2.3.3
+numpy==2.2.6

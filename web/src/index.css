@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+html { color-scheme: light dark; }
+
+body {
+  margin: 0;
+  background: var(--color-slate-50);
+  color: var(--color-slate-900);
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background: var(--color-slate-950);
+    color: var(--color-slate-100);
+  }
+}
