@@ -205,10 +205,18 @@ def evaluate(
     extras: dict | None = None,
     quality_score: float | None = None,
     quality_gate: bool = True,
+    hard_excluded: bool = False,
 ) -> SupportSetup:
     """Score one symbol's support setup as of `index`."""
     extras = extras or {}
     setup = SupportSetup()
+
+    if hard_excluded:
+        # A red flag removes the business from consideration entirely; no chart
+        # pattern rescues promoters selling into a pledge or profit that never
+        # becomes cash.
+        setup.reason = "excluded by a red flag"
+        return setup
 
     if quality_gate:
         if quality_score is None:

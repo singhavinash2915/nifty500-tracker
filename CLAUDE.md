@@ -14,6 +14,8 @@ cd ingestion
 ../.venv/bin/python -m n500.jobs.load_prices --days 760 --dry-run   # ~10 min cold
 ../.venv/bin/python -m n500.jobs.load_index  --days 760 --dry-run
 ../.venv/bin/python -m n500.jobs.compute_technicals --dry-run --tail 5
+../.venv/bin/python -m n500.jobs.load_fundamentals --dry-run        # ~70 min cold
+../.venv/bin/python -m n500.jobs.compute_fundamental_scores --dry-run
 ../.venv/bin/python -m n500.jobs.compute_zones --dry-run
 ../.venv/bin/python -m n500.jobs.compute_scores --dry-run
 
@@ -78,6 +80,21 @@ data/dryrun/           gitignored job output when Supabase is unconfigured
 11. **Coerce numpy booleans to `bool` before they reach JSONB.** A `np.bool_`
     serialises to the *string* `"False"`, which is truthy — the UI then shows a
     reversal confirmation that never fired.
+12. **Score lenders on a different question set.** A bank funds itself with
+    deposits, so debt/equity and interest cover describe its model rather than
+    its risk, and Screener publishes no ROCE or operating margin for one.
+    HDFCBANK's reported "OPM" of -12% is a Financing Margin. Applying the
+    general set would push all 101 Financial Services names to the bottom of
+    the index for asking the wrong questions.
+13. **A check that could not run is `unknown`, never `pass`.** Screener carries
+    no pledge figure, so the promoter-pledge gate is permanently unevaluable
+    from this source. Reporting it clear would give false comfort about the
+    commonest way an Indian mid-cap goes wrong.
+14. **A missing Promoters row is a fact, not a gap.** ITC, HDFC Bank and
+    Infosys have no promoter, so promoter-selling is `not_applicable`.
+15. **Dry-run upsert merges by key.** Overwriting the file was silent data
+    loss: a job writing three `stocks` rows replaced the 500-row universe, and
+    the next job ran on three symbols and reported success.
 
 ## Scoring model
 
@@ -114,7 +131,8 @@ accumulation signal not yet wired in.
       split adjustment, 19 indicators, momentum score, screener table.
 - [x] **3 — Zone engine + T-S.** SPL/SPH ported from `structural_poc.pine`,
       fractal swings, volume shelves, ~9k zones, reversal confirmation, gates.
-- [ ] 4 — Fundamentals scrapers + Q and V (also turns on the `--quality-gate`)
+- [x] **4 — Fundamentals + Q and V.** Screener.in scraper, red-flag gates,
+      quality gate live on T-S, blended Q 45 / V 20 / technical 35.
 - [ ] 5 — Screener and stock detail UI
 - [ ] 6 — Backtest engine
 - [ ] 7 — Positions, alerts, scheduling
@@ -137,3 +155,24 @@ market.
 The stop is never closer than 1.5 ATR from entry. A stop at the floor of a
 tight band can sit 2% away, which produces a headline 23:1 reward-to-risk that
 ordinary noise stops out within days.
+
+## Fundamentals notes
+
+Screener.in prohibits automated access in its terms. The route was chosen
+knowingly; the module is built to be a considerate guest — one request every
+2.5-4 seconds, pages cached 25 days (financials change quarterly, so refetching
+daily is scrape volume for no information), and everything behind one interface
+so a paid feed is a one-file swap.
+
+`filed_on` is an **estimate**: Screener publishes the period but not the filing
+date, so rows use the SEBI LODR deadline (45 days after a quarter, 60 after a
+year) and carry `filed_on_is_estimated`. Erring late is the safe direction — it
+can only make a backtest pessimistic, whereas erring early is look-ahead bias.
+
+Odd reporting periods are annualised. A company changing its year-end files a
+15-month year, which Screener labels `Mar 202315m`; left alone that reads as a
+25% growth spurt followed by a collapse.
+
+**Known gap:** promoter pledge is not available from Screener and the gate
+reports `unknown`. Trendlyne carries it but is keyed by an internal numeric id
+(HDFCBANK is 1024) that would need per-symbol discovery — a second scraper.

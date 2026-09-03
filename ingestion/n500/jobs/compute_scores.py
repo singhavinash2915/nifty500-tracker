@@ -2,14 +2,18 @@
 
     python -m n500.jobs.compute_scores --dry-run
 
-Phase 3 fills in T-M and T-S. Q and V arrive in phase 4; their columns stay
-null rather than being faked with a placeholder, so nothing downstream can
-mistake "not computed yet" for "scored zero".
+All four scores are live. The technical input to the blend is max(T-M, T-S),
+and the winning setup is recorded: a stock is never punished for being a good
+reversal candidate rather than a good breakout, because they are different
+setups and averaging them would make both invisible.
 
-The technical input to the blend is max(T-M, T-S), and the winning setup is
-recorded. A stock is never punished for being a good reversal candidate rather
-than a good breakout — they are different setups, and averaging them would
-make both invisible.
+Default blend weights are Q 45 / V 20 / technical 35 — quality decides *what*
+you are willing to own, the technical decides *when*. They are a starting
+suggestion only; the phase 6 backtest is what should set them, not intuition.
+
+A business excluded by a red flag gets no blended score at all. Not a low one:
+a stock whose reported profit never becomes cash does not belong on the list,
+and leaving it there with a poor number invites it to be bought anyway.
 """
 
 from __future__ import annotations
@@ -25,6 +29,10 @@ from ..scoring import momentum
 from ..scoring.ranking import peer_groups
 
 JOB = "compute_scores"
+
+# Starting suggestion for a six-month hold, not a conclusion. Phase 6's
+# backtest is what should set these.
+WEIGHTS = {"quality": 45.0, "value": 20.0, "technical": 35.0}
 
 
 def build_snapshot(technicals: pd.DataFrame, prices: pd.DataFrame, stocks: pd.DataFrame) -> pd.DataFrame:
@@ -83,6 +91,26 @@ def main(argv: list[str] | None = None) -> int:
 
     as_of = snapshot["date"].max().date()
 
+    fundamentals = pd.DataFrame(db.select("fundamental_scores"))
+    q = pd.Series(np.nan, index=snapshot.index, dtype="float64")
+    v = pd.Series(np.nan, index=snapshot.index, dtype="float64")
+    excluded = pd.Series(False, index=snapshot.index, dtype="bool")
+    flags_by: dict[str, list] = {}
+    if not fundamentals.empty:
+        latest_f = (
+            fundamentals.sort_values("date").groupby("symbol").tail(1).set_index("symbol")
+        )
+        q = pd.to_numeric(latest_f["quality_score"].reindex(snapshot.index), errors="coerce")
+        v = pd.to_numeric(latest_f["value_score"].reindex(snapshot.index), errors="coerce")
+        excluded = (
+            latest_f["excluded"].reindex(snapshot.index).fillna(False).astype(bool)
+        )
+        flags_by = {
+            symbol: latest_f.loc[symbol, "flags"]
+            for symbol in latest_f.index
+            if symbol in snapshot.index
+        }
+
     setups = pd.DataFrame(db.select("ts_setups"))
     ts = pd.Series(np.nan, index=snapshot.index, dtype="float64")
     status = pd.Series("none", index=snapshot.index, dtype="object")
@@ -100,11 +128,26 @@ def main(argv: list[str] | None = None) -> int:
         groups = peer_groups(snapshot["sector"])
 
         # max(T-M, T-S): the two setups are alternatives, not components.
-        blended = pd.concat([tm, ts], axis=1).max(axis=1, skipna=True)
+        technical = pd.concat([tm, ts], axis=1).max(axis=1, skipna=True)
         winner = pd.Series("none", index=snapshot.index, dtype="object")
         winner[tm.notna()] = "momentum"
         wins_support = ts.notna() & (tm.isna() | (ts > tm))
         winner[wins_support] = "support"
+
+        pillars = {"quality": (q, WEIGHTS["quality"]),
+                   "value": (v, WEIGHTS["value"]),
+                   "technical": (technical, WEIGHTS["technical"])}
+        weighted = pd.Series(0.0, index=snapshot.index)
+        available = pd.Series(0.0, index=snapshot.index)
+        for series, weight in pillars.values():
+            weighted += series.fillna(0.0) * weight
+            available += series.notna().astype("float64") * weight
+
+        # Renormalise over whichever pillars exist, so the screener stays usable
+        # while a phase is still landing — but never invent a pillar.
+        blended = (weighted / available.replace(0.0, np.nan)).round(2)
+        blended = blended.mask(excluded)
+        winner = winner.mask(excluded, "none")
 
         sector_rank = (
             blended.groupby(groups).rank(ascending=False, method="min").astype("Int64")
@@ -123,8 +166,8 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "symbol": symbol,
                     "date": as_of.isoformat(),
-                    "quality_score": None,
-                    "value_score": None,
+                    "quality_score": None if pd.isna(q.loc[symbol]) else round(float(q.loc[symbol]), 2),
+                    "value_score": None if pd.isna(v.loc[symbol]) else round(float(v.loc[symbol]), 2),
                     "tm_score": None if pd.isna(tm.loc[symbol]) else round(float(tm.loc[symbol]), 2),
                     "ts_score": None if pd.isna(ts.loc[symbol]) else round(float(ts.loc[symbol]), 2),
                     "blended": None if pd.isna(value) else round(float(value), 2),
@@ -132,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
                     "setup_status": status.loc[symbol],
                     "sector_rank": None if pd.isna(sector_rank.loc[symbol]) else int(sector_rank.loc[symbol]),
                     "decile": None if pd.isna(decile.loc[symbol]) else int(decile.loc[symbol]),
-                    "flags": [],
+                    "flags": flags_by.get(symbol, []),
                 }
             )
             log.symbols_ok += 1
@@ -140,8 +183,8 @@ def main(argv: list[str] | None = None) -> int:
         log.rows_written = db.upsert("scores_daily", rows, on_conflict="symbol,date")
         support_wins = int((winner == "support").sum())
         log.notes = (
-            f"{len(rows)} scored as of {as_of}; "
-            f"{support_wins} led by the support setup"
+            f"{len(rows)} scored as of {as_of}; {support_wins} led by the "
+            f"support setup; {int(excluded.sum())} excluded by a red flag"
         )
         summary = log.notes
 

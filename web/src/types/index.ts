@@ -19,6 +19,15 @@ export interface ScreenerRow {
   company_name: string
   sector: string | null
   close: number | null
+  company_type: 'financial' | 'general' | null
+  /** Quality & growth. Null when a red flag excluded the business. */
+  quality_score: number | null
+  /** Value. */
+  value_score: number | null
+  pe: number | null
+  roe: number | null
+  /** Red-flag verdicts worth showing: failures, and checks that could not run. */
+  flags: { name: string; verdict: string; detail: string | null }[]
   /** Momentum / breakout setup. */
   tm_score: number | null
   /** Support-reversal setup. */
@@ -27,8 +36,6 @@ export interface ScreenerRow {
   blended: number | null
   winning_setup: Setup
   setup_status: SetupStatus
-  quality_score?: number | null
-  value_score?: number | null
   decile: number | null
   mom_12_1: number | null
   rs_vs_index: number | null

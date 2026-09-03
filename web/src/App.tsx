@@ -6,7 +6,15 @@ import type { ScreenerRow, ScreenerSnapshot } from './types'
 // Mirrors momentum.BELOW_200DMA_CAP on the Python side.
 const BELOW_200DMA_CAP = 40
 
-type View = 'all' | 'momentum' | 'support'
+type View = 'all' | 'momentum' | 'support' | 'excluded'
+
+const FLAG_LABELS: Record<string, string> = {
+  promoter_pledge: 'promoter pledge',
+  promoter_selling: 'promoter selling',
+  cash_conversion: 'profit not becoming cash',
+  receivable_bloat: 'receivables ballooning',
+  loss_making: 'loss-making',
+}
 
 const CONFIRMATION_LABELS: Record<string, string> = {
   bullish_candle: 'reversal candle',
@@ -47,13 +55,18 @@ export default function App() {
     }
   }, [])
 
-  const breadth = useMemo(() => {
-    const known = rows.filter((r) => r.above_200dma !== null)
-    return known.length ? known.filter((r) => r.above_200dma).length / known.length : null
-  }, [rows])
-
   const atSupport = useMemo(
     () => rows.filter((r) => r.setup_status !== 'none'),
+    [rows],
+  )
+
+  const withQuality = useMemo(
+    () => rows.filter((r) => r.quality_score !== null),
+    [rows],
+  )
+
+  const flagged = useMemo(
+    () => rows.filter((r) => r.flags.some((f) => f.verdict === 'fail')),
     [rows],
   )
 
@@ -62,9 +75,11 @@ export default function App() {
     const base =
       view === 'support'
         ? atSupport
-        : view === 'momentum'
-          ? rows.filter((r) => r.winning_setup === 'momentum')
-          : rows
+        : view === 'excluded'
+          ? flagged
+          : view === 'momentum'
+            ? rows.filter((r) => r.winning_setup === 'momentum')
+            : rows
     if (!q) return base
     return base.filter(
       (r) =>
@@ -72,22 +87,23 @@ export default function App() {
         r.company_name.toLowerCase().includes(q) ||
         (r.sector ?? '').toLowerCase().includes(q),
     )
-  }, [rows, atSupport, query, view])
+  }, [rows, atSupport, flagged, query, view])
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-10">
       <header className="mb-8">
         <p className="font-mono text-xs uppercase tracking-[0.15em] text-slate-500">
-          Phase 3 &middot; momentum + support
+          Phase 4 &middot; quality, value, momentum, support
         </p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight">
           Nifty 500 Conviction Tracker
         </h1>
         <p className="mt-2 max-w-2xl text-slate-600 dark:text-slate-400">
-          Two setups, scored separately. <strong>T-M</strong> rewards a stock making new
-          highs; <strong>T-S</strong> rewards one reversing off a tested support zone.
-          The blend is whichever is stronger, so a good reversal is never penalised for
-          not being a breakout. Quality and value gates arrive in phase 4.
+          Four scores. <strong>Q</strong> and <strong>V</strong> judge the business;
+          <strong>T-M</strong> rewards a stock making new highs and <strong>T-S</strong>
+          one reversing off a tested support zone. The blend is Q 45 / V 20 / whichever
+          technical is stronger 35. A business failing a hard gate gets no score at all
+          rather than a poor one.
           {asOf && <> Prices as of <span className="font-mono">{asOf}</span>.</>}
         </p>
       </header>
@@ -116,15 +132,15 @@ export default function App() {
       <div className="mb-8 grid gap-4 sm:grid-cols-3">
         <Stat label="Scored" value={loading ? '—' : String(rows.length)} />
         <Stat
-          label="Above 200DMA"
-          value={breadth === null ? '—' : `${Math.round(breadth * 100)}%`}
-          hint="market breadth"
+          label="With fundamentals"
+          value={String(withQuality.length)}
+          hint={`${flagged.length} excluded by a red flag`}
+          icon={<Database className="h-4 w-4" />}
         />
         <Stat
           label="At a support zone"
           value={String(atSupport.length)}
           hint={`${atSupport.filter((r) => r.setup_status === 'triggered').length} triggered`}
-          icon={<Database className="h-4 w-4" />}
         />
       </div>
 
@@ -134,6 +150,7 @@ export default function App() {
             ['all', 'All'],
             ['momentum', 'Momentum'],
             ['support', 'At support'],
+            ['excluded', 'Red flags'],
           ] as [View, string][]
         ).map(([key, label]) => (
           <button
@@ -161,6 +178,8 @@ export default function App() {
 
       {view === 'support' ? (
         <SupportList rows={filtered} />
+      ) : view === 'excluded' ? (
+        <FlagList rows={filtered} />
       ) : (
         <ScreenerTable rows={filtered} />
       )}
@@ -168,7 +187,10 @@ export default function App() {
       <p className="mt-6 text-xs text-slate-500">
         A stock below its 200DMA is capped at {BELOW_200DMA_CAP} on T-M however well it
         ranks elsewhere. A support setup with no reversal confirmation is capped at 55 and
-        can never reach the top decile. For personal research. Not investment advice.
+        can never reach the top decile, and is only computed for a business scoring
+        Q&nbsp;&ge;&nbsp;60. Promoter pledge cannot be checked from the current data
+        source and is reported as unknown, never as clear. For personal research. Not
+        investment advice.
       </p>
     </div>
   )
@@ -247,6 +269,49 @@ function SupportList({ rows }: { rows: ScreenerRow[] }) {
   )
 }
 
+function FlagList({ rows }: { rows: ScreenerRow[] }) {
+  if (!rows.length) {
+    return (
+      <p className="rounded-md border border-slate-200 p-6 text-sm text-slate-500 dark:border-slate-800">
+        No businesses currently fail a hard gate.
+      </p>
+    )
+  }
+  return (
+    <div className="grid gap-2">
+      <p className="text-sm text-slate-600 dark:text-slate-400">
+        These are excluded outright rather than scored poorly. Shown so a name you were
+        watching does not simply vanish.
+      </p>
+      {rows.map((r) => (
+        <div
+          key={r.symbol}
+          className="rounded-md border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900"
+        >
+          <div className="flex flex-wrap items-baseline gap-x-3">
+            <span className="font-mono font-semibold">{r.symbol}</span>
+            <span className="text-sm text-slate-500">{r.company_name}</span>
+            <span className="ml-auto text-xs text-slate-400">{r.sector}</span>
+          </div>
+          <ul className="mt-2 flex flex-wrap gap-2 text-xs">
+            {r.flags
+              .filter((f) => f.verdict === 'fail')
+              .map((f) => (
+                <li
+                  key={f.name}
+                  className="rounded bg-red-100 px-2 py-0.5 text-red-800 dark:bg-red-950/60 dark:text-red-300"
+                >
+                  {FLAG_LABELS[f.name] ?? f.name}
+                  {f.detail ? ` — ${f.detail}` : ''}
+                </li>
+              ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function ScreenerTable({ rows }: { rows: ScreenerRow[] }) {
   return (
     <>
@@ -258,11 +323,12 @@ function ScreenerTable({ rows }: { rows: ScreenerRow[] }) {
               <th className="px-3 py-2">Sector</th>
               <th className="px-3 py-2 text-right">Close</th>
               <th className="px-3 py-2 text-right">Blend</th>
+              <th className="px-3 py-2 text-right">Q</th>
+              <th className="px-3 py-2 text-right">V</th>
               <th className="px-3 py-2">Setup</th>
               <th className="px-3 py-2 text-right">T-M</th>
               <th className="px-3 py-2 text-right">T-S</th>
               <th className="px-3 py-2 text-right">12-1 mom</th>
-              <th className="px-3 py-2 text-right">RSI</th>
             </tr>
           </thead>
           <tbody>
@@ -278,6 +344,12 @@ function ScreenerTable({ rows }: { rows: ScreenerRow[] }) {
                 </td>
                 <td className="px-3 py-2 text-right">
                   <ScoreChip value={r.blended} capped={r.above_200dma === false} />
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-500">
+                  {r.quality_score?.toFixed(0) ?? '—'}
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-500">
+                  {r.value_score?.toFixed(0) ?? '—'}
                 </td>
                 <td className="px-3 py-2 text-xs">
                   {r.winning_setup === 'support' ? (
@@ -295,9 +367,6 @@ function ScreenerTable({ rows }: { rows: ScreenerRow[] }) {
                   {r.ts_score?.toFixed(1) ?? '—'}
                 </td>
                 <td className="px-3 py-2 text-right"><Pct value={r.mom_12_1} /></td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-500">
-                  {r.rsi14?.toFixed(0) ?? '—'}
-                </td>
               </tr>
             ))}
           </tbody>

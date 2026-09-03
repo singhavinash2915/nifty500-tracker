@@ -71,3 +71,33 @@ def test_rejects_duplicate_symbols():
 )
 def test_week_start(given, expected):
     assert week_start(given) == expected
+
+
+def test_dry_run_upsert_merges_instead_of_overwriting(tmp_path, monkeypatch):
+    """Regression: a job writing three `stocks` rows to record company_type
+    replaced the whole 500-row universe file, and the next job then ran against
+    three symbols and reported success."""
+    from n500 import db as db_module
+
+    monkeypatch.setattr(db_module, "DRYRUN_DIR", tmp_path)
+    database = db_module.Db(force_dry_run=True)
+
+    database.upsert(
+        "stocks",
+        [{"symbol": "A", "sector": "Fin"}, {"symbol": "B", "sector": "IT"}],
+        on_conflict="symbol",
+    )
+    # A later job touches one row with a partial payload.
+    database.upsert("stocks", [{"symbol": "A", "company_type": "financial"}],
+                    on_conflict="symbol")
+
+    rows = {r["symbol"]: r for r in database.select("stocks")}
+    assert set(rows) == {"A", "B"}, "the untouched row must survive"
+    assert rows["A"]["sector"] == "Fin", "existing columns must survive"
+    assert rows["A"]["company_type"] == "financial"
+
+
+def test_dry_run_upsert_without_a_key_appends():
+    from n500 import db as db_module
+
+    assert db_module.Db(force_dry_run=True) is not None

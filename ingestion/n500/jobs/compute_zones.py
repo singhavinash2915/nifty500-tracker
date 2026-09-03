@@ -85,9 +85,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build zones and score T-S")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
-        "--quality-gate",
+        "--no-quality-gate",
         action="store_true",
-        help="require Q >= 60 (phase 4); off until quality scores exist",
+        help="score T-S without requiring Q >= 60 (for debugging the engine)",
     )
     parser.add_argument("--symbols", help="comma-separated subset, for debugging")
     args = parser.parse_args(argv)
@@ -97,6 +97,29 @@ def main(argv: list[str] | None = None) -> int:
     if prices.empty:
         print(f"[{JOB}] no prices — run load_prices first", file=sys.stderr)
         return 1
+
+    # The fundamentals gate: a weak business at support is a cheaper weak
+    # business, and it will keep getting cheaper.
+    quality_gate = not args.no_quality_gate
+    quality_by: dict[str, float] = {}
+    excluded: set[str] = set()
+    fundamentals = pd.DataFrame(db.select("fundamental_scores"))
+    if not fundamentals.empty:
+        latest = fundamentals.sort_values("date").groupby("symbol").tail(1)
+        for _, row in latest.iterrows():
+            if row.get("excluded"):
+                excluded.add(row["symbol"])
+                continue
+            score_value = pd.to_numeric(row.get("quality_score"), errors="coerce")
+            if not pd.isna(score_value):
+                quality_by[row["symbol"]] = float(score_value)
+    elif quality_gate:
+        print(
+            f"[{JOB}] no quality scores yet — every setup will report "
+            "'quality score not yet available'. Run compute_fundamental_scores "
+            "first, or pass --no-quality-gate.",
+            file=sys.stderr,
+        )
 
     wanted = (
         {s.strip().upper() for s in args.symbols.split(",")} if args.symbols else None
@@ -120,7 +143,11 @@ def main(argv: list[str] | None = None) -> int:
 
             try:
                 setup, zones = _evaluate_symbol(
-                    daily, weekly, quality_gate=args.quality_gate
+                    daily,
+                    weekly,
+                    quality_gate=quality_gate,
+                    quality_score=quality_by.get(symbol),
+                    hard_excluded=symbol in excluded,
                 )
             except Exception as exc:  # noqa: BLE001 — one bad symbol must not stop the sweep
                 log.error(symbol, repr(exc))
@@ -203,7 +230,14 @@ def _mean_reaction(zone) -> float | None:
     return round(float(np.mean(values)), 3) if values else None
 
 
-def _evaluate_symbol(daily: pd.DataFrame, weekly: pd.DataFrame, *, quality_gate: bool):
+def _evaluate_symbol(
+    daily: pd.DataFrame,
+    weekly: pd.DataFrame,
+    *,
+    quality_gate: bool,
+    quality_score: float | None = None,
+    hard_excluded: bool = False,
+):
     """Build both timeframes' zones and score the daily setup."""
     daily_atr = ind.atr(daily["high"], daily["low"], daily["close"], 14)
     weekly_atr = ind.atr(weekly["high"], weekly["low"], weekly["close"], 14)
@@ -243,8 +277,9 @@ def _evaluate_symbol(daily: pd.DataFrame, weekly: pd.DataFrame, *, quality_gate:
         pivots=find_pivots(daily),
         confirmation=confirmation,
         extras=_extras(daily, index, price, atr_value or 1.0),
-        quality_score=None,
+        quality_score=quality_score,
         quality_gate=quality_gate,
+        hard_excluded=hard_excluded,
     )
     return setup, {"daily": daily_zones, "weekly": weekly_zones}
 

@@ -51,9 +51,7 @@ class Db:
             return 0
 
         if self.dry_run:
-            DRYRUN_DIR.mkdir(parents=True, exist_ok=True)
-            path = DRYRUN_DIR / f"{table}.json"
-            path.write_text(json.dumps(rows, indent=2, default=str))
+            self._dry_run_upsert(table, rows, on_conflict=on_conflict)
             return len(rows)
 
         for start in range(0, len(rows), chunk_size):
@@ -61,6 +59,47 @@ class Db:
             query = self._client.table(table).upsert(chunk, on_conflict=on_conflict)
             query.execute()
         return len(rows)
+
+    def _dry_run_upsert(
+        self, table: str, rows: list[dict[str, Any]], *, on_conflict: str | None
+    ) -> None:
+        """Merge into the local JSON the way a real upsert merges into a table.
+
+        Overwriting the file instead was a silent data-loss bug: a job that
+        wrote three `stocks` rows to record company_type replaced the whole
+        500-row universe, and the next job then ran against three symbols and
+        reported success. Dry-run has to behave like the database or it is not
+        a rehearsal of anything.
+        """
+        DRYRUN_DIR.mkdir(parents=True, exist_ok=True)
+        path = DRYRUN_DIR / f"{table}.json"
+
+        existing: list[dict[str, Any]] = []
+        if path.exists():
+            try:
+                loaded = json.loads(path.read_text())
+                if isinstance(loaded, list):
+                    existing = loaded
+            except json.JSONDecodeError:
+                existing = []
+
+        keys = [k.strip() for k in on_conflict.split(",")] if on_conflict else None
+        if not keys:
+            merged = existing + rows
+        else:
+            def identity(row: dict[str, Any]) -> tuple:
+                return tuple(str(row.get(k)) for k in keys)
+
+            index = {identity(row): row for row in existing}
+            for row in rows:
+                key = identity(row)
+                if key in index:
+                    index[key].update(row)      # merge, so partial writes add columns
+                else:
+                    index[key] = dict(row)
+            merged = list(index.values())
+
+        path.write_text(json.dumps(merged, indent=2, default=str))
 
     def update(self, table: str, values: dict[str, Any], *, where: dict[str, Any]) -> None:
         if self.dry_run:
