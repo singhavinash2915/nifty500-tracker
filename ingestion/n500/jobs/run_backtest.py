@@ -18,14 +18,14 @@ import numpy as np
 import pandas as pd
 
 from ..backtest import engine, pointintime
-from ..config import REPO_ROOT
+from ..config import REPO_ROOT, settings
 from ..db import Db, run
 from ..jobs.compute_technicals import adjusted_frame
 from ..jobs.compute_zones import to_weekly
 from ..sources.nse_index import BENCHMARK
 
 JOB = "run_backtest"
-DEFAULT_WEIGHTS = {"quality": 45.0, "value": 20.0, "technical": 35.0}
+DEFAULT_WEIGHTS = settings.blend_weights
 
 
 def load_histories(db: Db, *, limit: int | None = None) -> tuple[dict, dict, pd.Series | None]:
@@ -109,9 +109,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hold", type=int, default=126, help="trading days held (126 ~ 6 months)")
     parser.add_argument("--size", type=int, default=20, help="portfolio size")
     parser.add_argument("--setup", choices=["all", "momentum", "support"], default="all")
-    parser.add_argument("--quality-weight", type=float, default=45.0)
-    parser.add_argument("--value-weight", type=float, default=20.0)
-    parser.add_argument("--technical-weight", type=float, default=35.0)
+    parser.add_argument("--quality-weight", type=float, default=DEFAULT_WEIGHTS["quality"])
+    parser.add_argument("--value-weight", type=float, default=DEFAULT_WEIGHTS["value"])
+    parser.add_argument("--technical-weight", type=float, default=DEFAULT_WEIGHTS["technical"])
     parser.add_argument("--limit", type=int, default=0, help="symbols, for a quick pass")
     parser.add_argument("--out", default=str(REPO_ROOT / "data" / "backtest"))
     args = parser.parse_args(argv)

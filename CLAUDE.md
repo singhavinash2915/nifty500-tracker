@@ -20,6 +20,7 @@ cd ingestion
 ../.venv/bin/python -m n500.jobs.compute_scores --dry-run
 ../.venv/bin/python -m n500.jobs.export_snapshot --dry-run   # writes web/public/
 ../.venv/bin/python -m n500.jobs.run_backtest --dry-run      # ~20 min, 500 symbols
+../.venv/bin/python -m n500.jobs.sweep_weights --dry-run     # ~20 min; --reuse is instant
 
 ./.venv/bin/python -m pytest ingestion/tests -q    # from the repo root
 
@@ -108,7 +109,12 @@ data/dryrun/           gitignored job output when Supabase is unconfigured
 19. **Charts subscribe to the theme.** Reading `matchMedia` once at render
     leaves the SVG painting light ink on a dark surface; CSS follows the theme
     instantly and JavaScript-coloured marks do not.
-20. **Never compound overlapping holds.** Monthly rebalances with a six-month
+20. **Judge a signal by its information coefficient, not by a decile curve.**
+    A rank correlation over ten decile medians reported +0.89 for a
+    stock-level signal of +0.035, and a grid search on that statistic turned
+    noise into a confident recommendation. IC is the mean within-date rank
+    correlation over every observation, and it carries a standard error.
+21. **Never compound overlapping holds.** Monthly rebalances with a six-month
     hold overlap almost completely: 14 of them span 1.55 years, not seven.
     Compounding turned a 2.36x product into a fictitious seven-year CAGR.
     Annualise the mean return *per hold* instead, and measure drawdown only on
@@ -203,8 +209,36 @@ cut both ways: 14 overlapping rebalances inside a single weak-market regime
 (the index rose 7.6% over the whole span) is a verdict on this sample, not on
 the strategy, and the universe still carries survivorship bias.
 
-The useful conclusion is that **the weights and thresholds are not yet
-evidence-based**, and the decile table is the instrument for fixing that.
+## What the weight sweep says
+
+67 weight combinations scored on the information coefficient — the mean
+within-date rank correlation between score and the next six months, over 4,637
+observations across 14 rebalances.
+
+| weighting | IC | t | in both halves |
+|---|---|---|---|
+| 0/50/50 (best) | +0.065 | +1.90 | yes |
+| 25/35/40 (**current default**) | +0.045 | +1.44 | yes |
+| 45/20/35 (plan's original) | +0.019 | +0.64 | yes |
+| 100/0/0 — quality alone | **-0.041** | **-2.48** | no |
+| 0/100/0 — value alone | +0.035 | +1.28 | yes |
+| 0/0/100 — technical alone | +0.033 | +1.30 | no |
+
+Exactly one result clears significance and it is that **the quality pillar
+predicted the next six months negatively**. Everything positive — including the
+grid's winner — sits inside the noise, and overlapping holding periods make the
+true standard errors larger than those shown.
+
+So the default weighting moved to **25 / 35 / 40**: enough of a cut to stop
+paying for a pillar the evidence is against, not so much as to adopt the peak
+of a 67-candidate grid fitted to one regime. Override with `WEIGHT_QUALITY`,
+`WEIGHT_VALUE` and `WEIGHT_TECHNICAL` in `.env`.
+
+Quality's *gates* are untouched — a red flag still excludes outright. What
+changed is how much the quality *score* is paid in the blend.
+
+The useful conclusion is that **no weighting is yet demonstrably good**, and
+the honest next step is more history rather than more tuning.
 
 ## Fundamentals notes
 

@@ -24,15 +24,17 @@ import sys
 import numpy as np
 import pandas as pd
 
+from ..config import settings
 from ..db import Db, run
 from ..scoring import momentum
 from ..scoring.ranking import peer_groups
 
 JOB = "compute_scores"
 
-# Starting suggestion for a six-month hold, not a conclusion. Phase 6's
-# backtest is what should set these.
-WEIGHTS = {"quality": 45.0, "value": 20.0, "technical": 35.0}
+# Set in config, overridable per environment. See the note there: the sweep's
+# one significant result is that quality predicted negatively, so its weight is
+# cut without adopting the grid's peak.
+WEIGHTS = settings.blend_weights
 
 
 def build_snapshot(technicals: pd.DataFrame, prices: pd.DataFrame, stocks: pd.DataFrame) -> pd.DataFrame:
