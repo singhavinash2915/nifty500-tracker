@@ -19,6 +19,7 @@ cd ingestion
 ../.venv/bin/python -m n500.jobs.compute_zones --dry-run
 ../.venv/bin/python -m n500.jobs.compute_scores --dry-run
 ../.venv/bin/python -m n500.jobs.export_snapshot --dry-run   # writes web/public/
+../.venv/bin/python -m n500.jobs.run_backtest --dry-run      # ~20 min, 500 symbols
 
 ./.venv/bin/python -m pytest ingestion/tests -q    # from the repo root
 
@@ -107,6 +108,11 @@ data/dryrun/           gitignored job output when Supabase is unconfigured
 19. **Charts subscribe to the theme.** Reading `matchMedia` once at render
     leaves the SVG painting light ink on a dark surface; CSS follows the theme
     instantly and JavaScript-coloured marks do not.
+20. **Never compound overlapping holds.** Monthly rebalances with a six-month
+    hold overlap almost completely: 14 of them span 1.55 years, not seven.
+    Compounding turned a 2.36x product into a fictitious seven-year CAGR.
+    Annualise the mean return *per hold* instead, and measure drawdown only on
+    the non-overlapping subset.
 
 ## Scoring model
 
@@ -148,7 +154,9 @@ accumulation signal not yet wired in.
 - [x] **5 — Screener and stock detail UI.** Sortable screener with live blend
       weights and a gate funnel; stock detail with price/zones/MA chart,
       financial trends and shareholding.
-- [ ] 6 — Backtest engine
+- [x] **6 — Backtest engine.** Point-in-time replay, 14 rebalances, decile
+      study over 4,637 observations, and an automated "does the score
+      actually rank?" check.
 - [ ] 7 — Positions, alerts, scheduling
 
 ## Zone engine notes
@@ -169,6 +177,34 @@ market.
 The stop is never closer than 1.5 ATR from entry. A stop at the floor of a
 tight band can sit 2% away, which produces a headline 23:1 reward-to-risk that
 ordinary noise stops out within days.
+
+## What the backtest says
+
+Run over Jan 2025 - Feb 2026 (14 monthly rebalances, 6-month holds, top 20,
+0.4% round-trip costs), the portfolio annualised **+13.7% against the Nifty
+500's +4.9%**. That looks good and should not be trusted yet, because the
+decile study — every scored stock's forward return, 4,637 observations —
+says the score barely ranks:
+
+| decile | n | median | >=25% | p10 |
+|---|---|---|---|---|
+| 10 | 466 | +3.7% | 17% | -19.4% |
+| 5 | 464 | +2.2% | 12% | -19.1% |
+| 1 | 469 | +2.0% | 16% | -18.4% |
+
+Rank correlation of decile against median return is +0.41; against the >=25%
+rate it is **+0.15**. Top decile beats bottom decile by 1.7pp of median return.
+A stock in the top decile reached +25% in 17% of cases; one in the bottom
+decile, 16%.
+
+So the portfolio's outperformance is more plausibly the top-20 concentration
+and the sector cap than the score separating winners from losers. Caveats that
+cut both ways: 14 overlapping rebalances inside a single weak-market regime
+(the index rose 7.6% over the whole span) is a verdict on this sample, not on
+the strategy, and the universe still carries survivorship bias.
+
+The useful conclusion is that **the weights and thresholds are not yet
+evidence-based**, and the decile table is the instrument for fixing that.
 
 ## Fundamentals notes
 

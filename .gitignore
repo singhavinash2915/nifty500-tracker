@@ -10,3 +10,4 @@ data/dryrun/
 data/cache/
 .DS_Store
 /web/public/stocks/
+/data/backtest/
