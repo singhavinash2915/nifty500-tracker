@@ -34,6 +34,17 @@ load_dotenv(REPO_ROOT / ".env")
 DEFAULT_BLEND_WEIGHTS = {"quality": 25.0, "value": 35.0, "technical": 40.0}
 
 
+# The tracker's tables live in their own Postgres schema rather than `public`.
+# The project hosting them also runs another application, and a dedicated
+# schema means the two can never collide on a table name, the host app's API
+# does not grow twenty unfamiliar endpoints, and removing the tracker is one
+# `drop schema n500 cascade` rather than twenty drops and a hope.
+#
+# PostgREST only serves schemas listed under Settings -> API -> Exposed
+# schemas, so `n500` has to be added there once.
+DB_SCHEMA = os.getenv("SUPABASE_SCHEMA", "n500")
+
+
 @dataclass(frozen=True)
 class Settings:
     supabase_url: str | None
@@ -41,6 +52,7 @@ class Settings:
     user_agent: str
     request_timeout: float
     blend_weights: dict[str, float]
+    db_schema: str = DB_SCHEMA
 
     @property
     def has_supabase(self) -> bool:
@@ -61,6 +73,7 @@ def load_settings() -> Settings:
             name: float(os.getenv(f"WEIGHT_{name.upper()}", default))
             for name, default in DEFAULT_BLEND_WEIGHTS.items()
         },
+        db_schema=DB_SCHEMA,
     )
 
 

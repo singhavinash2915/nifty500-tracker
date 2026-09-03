@@ -12,3 +12,4 @@ data/cache/
 /web/public/stocks/
 /data/backtest/
 /data/logs/
+supabase/.temp/

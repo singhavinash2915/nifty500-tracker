@@ -30,9 +30,14 @@ class Db:
         self._client = None
         if not self.dry_run:
             from supabase import create_client
+            from supabase.client import ClientOptions
 
             self._client = create_client(
-                settings.supabase_url, settings.supabase_service_key
+                settings.supabase_url,
+                settings.supabase_service_key,
+                # Everything the tracker writes lives in its own schema; see
+                # config.DB_SCHEMA for why.
+                options=ClientOptions(schema=settings.db_schema),
             )
 
     # -- writes ------------------------------------------------------

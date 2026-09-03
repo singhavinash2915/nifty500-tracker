@@ -24,6 +24,9 @@ cd ingestion
 
 ./.venv/bin/python -m pytest ingestion/tests -q    # from the repo root
 
+# is any of this actually working?
+../.venv/bin/python -m n500.jobs.doctor
+
 # web
 npm run dev   --prefix web
 npm run build --prefix web      # tsc -b && vite build
@@ -39,10 +42,38 @@ ingestion/n500/
   db.py                Supabase wrapper + RunLogger; dry-run writes data/dryrun/*.json
   sources/             one module per external data source, each with a parser
   jobs/                runnable entry points (python -m n500.jobs.<name>)
-supabase/migrations/   SQL run manually in the Supabase SQL Editor
+supabase/migrations/   SQL applied to the `n500` schema (see below)
 web/                   React 19 + Vite + Tailwind v4 (note: v4, unlike the SCC app's v3)
 data/dryrun/           gitignored job output when Supabase is unconfigured
 ```
+
+## Supabase
+
+The tracker shares the **vitalsync** project rather than having its own, and
+its tables live in a dedicated `n500` Postgres schema rather than `public`.
+That isolation is what makes sharing safe: the two applications cannot collide
+on a table name, vitalsync's API does not grow twenty unfamiliar endpoints, and
+removing the tracker is one `drop schema n500 cascade`.
+
+Applying migrations, from the repo root:
+
+```bash
+supabase link --project-ref vbyhumvshwsvbjtpwrmx
+for f in supabase/migrations/*.sql; do
+  { echo "set search_path to n500, public;"; cat "$f"; } > /tmp/mig.sql
+  supabase db query --linked -f /tmp/mig.sql
+done
+```
+
+The `set search_path` line is load-bearing. `search_path` persists across
+statements within one call, so unqualified `create table stocks` lands in
+`n500` — without it, twenty tables would appear in vitalsync's `public` schema.
+Always diff `information_schema.tables where table_schema='public'` before and
+after to prove nothing leaked.
+
+PostgREST only serves schemas listed under **Settings → API → Exposed schemas**,
+so `n500` must be added there once. `python -m n500.jobs.doctor` reports that
+and every other setup problem.
 
 ## Rules that the design depends on
 
