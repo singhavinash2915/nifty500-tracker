@@ -14,6 +14,7 @@ cd ingestion
 ../.venv/bin/python -m n500.jobs.load_prices --days 760 --dry-run   # ~10 min cold
 ../.venv/bin/python -m n500.jobs.load_index  --days 760 --dry-run
 ../.venv/bin/python -m n500.jobs.compute_technicals --dry-run --tail 5
+../.venv/bin/python -m n500.jobs.compute_zones --dry-run
 ../.venv/bin/python -m n500.jobs.compute_scores --dry-run
 
 ./.venv/bin/python -m pytest ingestion/tests -q    # from the repo root
@@ -67,6 +68,16 @@ data/dryrun/           gitignored job output when Supabase is unconfigured
 8. **Price-day candidates include weekends.** NSE runs a special live session on
    Budget day, 1 February, even on a Saturday. Skipping it leaves a hole that
    makes the next session look like a 2-4% corporate action.
+9. **A pivot is knowable only when it is confirmed.** An SPL sits at an earlier
+   bar than the Bar2 that proved it; a fractal lags by its span. Every pivot
+   carries `confirmed_index`, and historical queries filter on that, never on
+   the pivot's own date. Same trap as `filed_on`.
+10. **Weekly bars are stamped with the last session that actually traded.**
+    Pandas labels a `W-FRI` bin by its Friday even mid-week, which dated a
+    partial bar two days past the latest real session.
+11. **Coerce numpy booleans to `bool` before they reach JSONB.** A `np.bool_`
+    serialises to the *string* `"False"`, which is truthy — the UI then shows a
+    reversal confirmation that never fired.
 
 ## Scoring model
 
@@ -101,8 +112,28 @@ accumulation signal not yet wired in.
 - [x] **1 — Skeleton.** Schema, universe loader, web shell.
 - [x] **2 — Prices + technicals + T-M.** 247k price rows over 517 sessions,
       split adjustment, 19 indicators, momentum score, screener table.
-- [ ] 3 — Zone engine + T-S (port `structural_poc.pine` SPL/SPH to Python)
-- [ ] 4 — Fundamentals scrapers + Q and V
+- [x] **3 — Zone engine + T-S.** SPL/SPH ported from `structural_poc.pine`,
+      fractal swings, volume shelves, ~9k zones, reversal confirmation, gates.
+- [ ] 4 — Fundamentals scrapers + Q and V (also turns on the `--quality-gate`)
 - [ ] 5 — Screener and stock detail UI
 - [ ] 6 — Backtest engine
 - [ ] 7 — Positions, alerts, scheduling
+
+## Zone engine notes
+
+`find_pivots` is a faithful port of the Pine except for one documented
+departure: it re-anchors after 60 bars without a confirmed pivot. The original
+anchors at a user-chosen recent time on a 1-hour chart; pointed at two years of
+daily bars it stalls, producing 0-6 pivots over 517 sessions (AMBUJACEM: none).
+Clustering therefore draws on both SPL/SPH and conventional fractals — the
+first says which lows the current structure rests on, the second gives the
+dense coverage a long scan needs.
+
+`next_resistance` uses *major* resistance: swing highs with span 10, clustered
+within 0.6 ATR, requiring two members. The nearest minor swing high is
+typically 5-12% away, so testing headroom against it would reject the whole
+market.
+
+The stop is never closer than 1.5 ATR from entry. A stop at the floor of a
+tight band can sit 2% away, which produces a headline 23:1 reward-to-risk that
+ordinary noise stops out within days.

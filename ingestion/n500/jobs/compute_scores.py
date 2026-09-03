@@ -2,9 +2,14 @@
 
     python -m n500.jobs.compute_scores --dry-run
 
-Phase 2 fills in T-M only. Q, V and T-S arrive in later phases; their columns
-stay null rather than being faked with a placeholder, so nothing downstream can
+Phase 3 fills in T-M and T-S. Q and V arrive in phase 4; their columns stay
+null rather than being faked with a placeholder, so nothing downstream can
 mistake "not computed yet" for "scored zero".
+
+The technical input to the blend is max(T-M, T-S), and the winning setup is
+recorded. A stock is never punished for being a good reversal candidate rather
+than a good breakout — they are different setups, and averaging them would
+make both invisible.
 """
 
 from __future__ import annotations
@@ -78,13 +83,28 @@ def main(argv: list[str] | None = None) -> int:
 
     as_of = snapshot["date"].max().date()
 
+    setups = pd.DataFrame(db.select("ts_setups"))
+    ts = pd.Series(np.nan, index=snapshot.index, dtype="float64")
+    status = pd.Series("none", index=snapshot.index, dtype="object")
+    if not setups.empty:
+        latest_setups = (
+            setups.sort_values("date").groupby("symbol").tail(1).set_index("symbol")
+        )
+        ts = pd.to_numeric(
+            latest_setups["ts_score"].reindex(snapshot.index), errors="coerce"
+        )
+        status = latest_setups["setup_status"].reindex(snapshot.index).fillna("none")
+
     with run(JOB, db=db) as log:
         tm = momentum.score(snapshot)
         groups = peer_groups(snapshot["sector"])
 
-        # With only T-M available, the blend is T-M. Later phases put
-        # max(T-M, T-S) here, weighted against Q and V.
-        blended = tm
+        # max(T-M, T-S): the two setups are alternatives, not components.
+        blended = pd.concat([tm, ts], axis=1).max(axis=1, skipna=True)
+        winner = pd.Series("none", index=snapshot.index, dtype="object")
+        winner[tm.notna()] = "momentum"
+        wins_support = ts.notna() & (tm.isna() | (ts > tm))
+        winner[wins_support] = "support"
 
         sector_rank = (
             blended.groupby(groups).rank(ascending=False, method="min").astype("Int64")
@@ -106,10 +126,10 @@ def main(argv: list[str] | None = None) -> int:
                     "quality_score": None,
                     "value_score": None,
                     "tm_score": None if pd.isna(tm.loc[symbol]) else round(float(tm.loc[symbol]), 2),
-                    "ts_score": None,
+                    "ts_score": None if pd.isna(ts.loc[symbol]) else round(float(ts.loc[symbol]), 2),
                     "blended": None if pd.isna(value) else round(float(value), 2),
-                    "winning_setup": "momentum" if pd.notna(value) else "none",
-                    "setup_status": "none",
+                    "winning_setup": winner.loc[symbol],
+                    "setup_status": status.loc[symbol],
                     "sector_rank": None if pd.isna(sector_rank.loc[symbol]) else int(sector_rank.loc[symbol]),
                     "decile": None if pd.isna(decile.loc[symbol]) else int(decile.loc[symbol]),
                     "flags": [],
@@ -118,7 +138,11 @@ def main(argv: list[str] | None = None) -> int:
             log.symbols_ok += 1
 
         log.rows_written = db.upsert("scores_daily", rows, on_conflict="symbol,date")
-        log.notes = f"{len(rows)} scored as of {as_of}"
+        support_wins = int((winner == "support").sum())
+        log.notes = (
+            f"{len(rows)} scored as of {as_of}; "
+            f"{support_wins} led by the support setup"
+        )
         summary = log.notes
 
     mode = "dry run" if db.dry_run else "Supabase"

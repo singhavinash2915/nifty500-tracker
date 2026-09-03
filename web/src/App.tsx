@@ -3,36 +3,33 @@ import { Database, Search, TriangleAlert } from 'lucide-react'
 import { isConfigured, supabase } from './lib/supabase'
 import type { ScreenerRow, ScreenerSnapshot } from './types'
 
-// A stock below its 200DMA is capped at this score, however well it ranks on
-// everything else. Mirrors momentum.BELOW_200DMA_CAP on the Python side.
+// Mirrors momentum.BELOW_200DMA_CAP on the Python side.
 const BELOW_200DMA_CAP = 40
 
-type Source = 'supabase' | 'sample'
-type Filter = 'all' | 'leaders' | 'above200' | 'laggards'
+type View = 'all' | 'momentum' | 'support'
+
+const CONFIRMATION_LABELS: Record<string, string> = {
+  bullish_candle: 'reversal candle',
+  rsi_divergence: 'RSI divergence',
+  macd_turning_up: 'MACD turning up',
+  reclaimed_short_ma: 'reclaimed 20DMA',
+  volume_pattern: 'volume dry-up then expansion',
+}
 
 export default function App() {
   const [rows, setRows] = useState<ScreenerRow[]>([])
-  const [asOf, setAsOf] = useState<string>('')
-  const [source, setSource] = useState<Source>('sample')
+  const [asOf, setAsOf] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<Filter>('all')
+  const [view, setView] = useState<View>('all')
 
   useEffect(() => {
     let cancelled = false
 
     async function load() {
       if (supabase) {
-        const { data, error } = await supabase
-          .from('scores_daily')
-          .select('*, stocks(company_name, sector)')
-          .order('blended', { ascending: false })
-        if (!cancelled && !error && data?.length) {
-          setSource('supabase')
-          setLoading(false)
-          return
-        }
+        const { error } = await supabase.from('scores_daily').select('symbol').limit(1)
         if (!cancelled && error) setError(error.message)
       }
       const res = await fetch(`${import.meta.env.BASE_URL}scores-sample.json`)
@@ -40,7 +37,6 @@ export default function App() {
       if (!cancelled) {
         setRows(snapshot.rows)
         setAsOf(snapshot.as_of)
-        setSource('sample')
         setLoading(false)
       }
     }
@@ -53,37 +49,45 @@ export default function App() {
 
   const breadth = useMemo(() => {
     const known = rows.filter((r) => r.above_200dma !== null)
-    if (!known.length) return null
-    return known.filter((r) => r.above_200dma).length / known.length
+    return known.length ? known.filter((r) => r.above_200dma).length / known.length : null
   }, [rows])
+
+  const atSupport = useMemo(
+    () => rows.filter((r) => r.setup_status !== 'none'),
+    [rows],
+  )
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return rows.filter((r) => {
-      if (filter === 'leaders' && (r.decile ?? 0) < 9) return false
-      if (filter === 'above200' && !r.above_200dma) return false
-      if (filter === 'laggards' && (r.decile ?? 99) > 2) return false
-      if (!q) return true
-      return (
+    const base =
+      view === 'support'
+        ? atSupport
+        : view === 'momentum'
+          ? rows.filter((r) => r.winning_setup === 'momentum')
+          : rows
+    if (!q) return base
+    return base.filter(
+      (r) =>
         r.symbol.toLowerCase().includes(q) ||
         r.company_name.toLowerCase().includes(q) ||
-        (r.sector ?? '').toLowerCase().includes(q)
-      )
-    })
-  }, [rows, query, filter])
+        (r.sector ?? '').toLowerCase().includes(q),
+    )
+  }, [rows, atSupport, query, view])
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-10">
       <header className="mb-8">
         <p className="font-mono text-xs uppercase tracking-[0.15em] text-slate-500">
-          Phase 2 &middot; momentum
+          Phase 3 &middot; momentum + support
         </p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight">
           Nifty 500 Conviction Tracker
         </h1>
         <p className="mt-2 max-w-2xl text-slate-600 dark:text-slate-400">
-          T-M scores every constituent on trend, relative strength and accumulation.
-          Quality, value and the support-reversal setup arrive in later phases.
+          Two setups, scored separately. <strong>T-M</strong> rewards a stock making new
+          highs; <strong>T-S</strong> rewards one reversing off a tested support zone.
+          The blend is whichever is stronger, so a good reversal is never penalised for
+          not being a breakout. Quality and value gates arrive in phase 4.
           {asOf && <> Prices as of <span className="font-mono">{asOf}</span>.</>}
         </p>
       </header>
@@ -117,26 +121,26 @@ export default function App() {
           hint="market breadth"
         />
         <Stat
-          label="Source"
-          value={source === 'supabase' ? 'Supabase' : 'Dry-run snapshot'}
+          label="At a support zone"
+          value={String(atSupport.length)}
+          hint={`${atSupport.filter((r) => r.setup_status === 'triggered').length} triggered`}
           icon={<Database className="h-4 w-4" />}
         />
       </div>
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         {(
           [
             ['all', 'All'],
-            ['leaders', 'Top 2 deciles'],
-            ['above200', 'Above 200DMA'],
-            ['laggards', 'Bottom 2 deciles'],
-          ] as [Filter, string][]
+            ['momentum', 'Momentum'],
+            ['support', 'At support'],
+          ] as [View, string][]
         ).map(([key, label]) => (
           <button
             key={key}
-            onClick={() => setFilter(key)}
+            onClick={() => setView(key)}
             className={`rounded-md border px-3 py-1.5 text-sm transition ${
-              filter === key
+              view === key
                 ? 'border-slate-900 bg-slate-900 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900'
                 : 'border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800'
             }`}
@@ -155,6 +159,97 @@ export default function App() {
         </div>
       </div>
 
+      {view === 'support' ? (
+        <SupportList rows={filtered} />
+      ) : (
+        <ScreenerTable rows={filtered} />
+      )}
+
+      <p className="mt-6 text-xs text-slate-500">
+        A stock below its 200DMA is capped at {BELOW_200DMA_CAP} on T-M however well it
+        ranks elsewhere. A support setup with no reversal confirmation is capped at 55 and
+        can never reach the top decile. For personal research. Not investment advice.
+      </p>
+    </div>
+  )
+}
+
+function SupportList({ rows }: { rows: ScreenerRow[] }) {
+  if (!rows.length) {
+    return (
+      <p className="rounded-md border border-slate-200 p-6 text-sm text-slate-500 dark:border-slate-800">
+        Nothing at a live support zone right now. That is a normal reading — most of the
+        market is not at support on any given day.
+      </p>
+    )
+  }
+  return (
+    <div className="grid gap-3">
+      {rows.map((r) => (
+        <div
+          key={r.symbol}
+          className="rounded-md border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+        >
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="font-mono text-base font-semibold">{r.symbol}</span>
+            <span className="text-sm text-slate-500">{r.company_name}</span>
+            <StatusChip status={r.setup_status} />
+            <span className="ml-auto font-mono text-lg font-semibold tabular-nums">
+              {r.ts_score?.toFixed(1)}
+            </span>
+          </div>
+
+          <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
+            <Field label="Close" value={r.close?.toFixed(2)} />
+            <Field
+              label="Zone"
+              value={
+                r.zone_floor && r.zone_ceil
+                  ? `${r.zone_floor.toFixed(1)}–${r.zone_ceil.toFixed(1)}`
+                  : '—'
+              }
+            />
+            <Field label="Stop" value={r.stop_price?.toFixed(2)} />
+            <Field
+              label="Target"
+              value={
+                r.target_price
+                  ? `${r.target_price.toFixed(2)} (${((r.headroom ?? 0) * 100).toFixed(0)}%)`
+                  : '—'
+              }
+            />
+          </dl>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-mono text-slate-500">
+              R:R {r.reward_risk?.toFixed(1) ?? '—'}
+            </span>
+            {r.confirmations.map((c) => (
+              <span
+                key={c}
+                className="rounded bg-emerald-100 px-2 py-0.5 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+              >
+                {CONFIRMATION_LABELS[c] ?? c}
+              </span>
+            ))}
+            {r.caps.map((c) => (
+              <span
+                key={c}
+                className="rounded bg-amber-100 px-2 py-0.5 text-amber-900 dark:bg-amber-950/60 dark:text-amber-300"
+              >
+                {c}
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ScreenerTable({ rows }: { rows: ScreenerRow[] }) {
+  return (
+    <>
       <div className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-800">
         <table className="w-full border-collapse text-sm">
           <thead>
@@ -162,16 +257,16 @@ export default function App() {
               <th className="px-3 py-2">Symbol</th>
               <th className="px-3 py-2">Sector</th>
               <th className="px-3 py-2 text-right">Close</th>
+              <th className="px-3 py-2 text-right">Blend</th>
+              <th className="px-3 py-2">Setup</th>
               <th className="px-3 py-2 text-right">T-M</th>
+              <th className="px-3 py-2 text-right">T-S</th>
               <th className="px-3 py-2 text-right">12-1 mom</th>
-              <th className="px-3 py-2 text-right">RS</th>
-              <th className="px-3 py-2 text-right">Off 52wH</th>
               <th className="px-3 py-2 text-right">RSI</th>
-              <th className="px-3 py-2 text-right">ADX</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.slice(0, 100).map((r) => (
+            {rows.slice(0, 100).map((r) => (
               <tr key={r.symbol} className="border-t border-slate-200 dark:border-slate-800">
                 <td className="px-3 py-2">
                   <span className="font-mono font-medium">{r.symbol}</span>
@@ -182,33 +277,64 @@ export default function App() {
                   {r.close?.toFixed(2) ?? '—'}
                 </td>
                 <td className="px-3 py-2 text-right">
-                  <ScoreChip value={r.tm_score} capped={r.above_200dma === false} />
+                  <ScoreChip value={r.blended} capped={r.above_200dma === false} />
+                </td>
+                <td className="px-3 py-2 text-xs">
+                  {r.winning_setup === 'support' ? (
+                    <span className="rounded bg-sky-100 px-1.5 py-0.5 text-sky-800 dark:bg-sky-950 dark:text-sky-300">
+                      support
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">momentum</span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-500">
+                  {r.tm_score?.toFixed(1) ?? '—'}
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-500">
+                  {r.ts_score?.toFixed(1) ?? '—'}
                 </td>
                 <td className="px-3 py-2 text-right"><Pct value={r.mom_12_1} /></td>
-                <td className="px-3 py-2 text-right"><Pct value={r.rs_vs_index} /></td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-500">
-                  {r.dist_52w_high === null ? '—' : `${(r.dist_52w_high * 100).toFixed(1)}%`}
-                </td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-500">
                   {r.rsi14?.toFixed(0) ?? '—'}
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-500">
-                  {r.adx14?.toFixed(0) ?? '—'}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      {filtered.length > 100 && (
+      {rows.length > 100 && (
         <p className="mt-3 text-sm text-slate-500">
-          Showing 100 of {filtered.length}. Sorting and paging land with the full screener.
+          Showing 100 of {rows.length}. Sorting and paging land with the full screener.
         </p>
       )}
-      <p className="mt-6 text-xs text-slate-500">
-        A stock below its 200DMA is capped at {BELOW_200DMA_CAP} however well it ranks
-        elsewhere — marked with a dot. For personal research. Not investment advice.
-      </p>
+    </>
+  )
+}
+
+function StatusChip({ status }: { status: string }) {
+  if (status === 'triggered')
+    return (
+      <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+        triggered
+      </span>
+    )
+  if (status === 'watching')
+    return (
+      <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900 dark:bg-amber-950/60 dark:text-amber-300">
+        watching
+      </span>
+    )
+  return null
+}
+
+function Field({ label, value }: { label: string; value?: string }) {
+  return (
+    <div>
+      <dt className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
+        {label}
+      </dt>
+      <dd className="font-mono tabular-nums">{value ?? '—'}</dd>
     </div>
   )
 }
@@ -223,7 +349,7 @@ function ScoreChip({ value, capped }: { value: number | null; capped: boolean })
         : 'bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300'
   return (
     <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-mono text-xs font-semibold tabular-nums ${tone}`}>
-      {capped && <span title="below its 200DMA — score capped">&bull;</span>}
+      {capped && <span title="below its 200DMA — T-M capped">&bull;</span>}
       {value.toFixed(1)}
     </span>
   )
