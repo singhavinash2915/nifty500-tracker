@@ -8,14 +8,22 @@ value, momentum and reversal-from-support, for a ~6 month holding horizon.
 ## Commands
 
 ```bash
-# ingestion (python 3.13 in .venv)
-./.venv/bin/python -m n500.jobs.load_universe --dry-run   # run from ingestion/
-./.venv/bin/python -m pytest ingestion/tests -q
+# ingestion — run job modules from ingestion/, pytest from the repo root
+cd ingestion
+../.venv/bin/python -m n500.jobs.load_universe --dry-run
+../.venv/bin/python -m n500.jobs.load_prices --days 760 --dry-run   # ~10 min cold
+../.venv/bin/python -m n500.jobs.load_index  --days 760 --dry-run
+../.venv/bin/python -m n500.jobs.compute_technicals --dry-run --tail 5
+../.venv/bin/python -m n500.jobs.compute_scores --dry-run
+
+./.venv/bin/python -m pytest ingestion/tests -q    # from the repo root
 
 # web
 npm run dev   --prefix web
 npm run build --prefix web      # tsc -b && vite build
 ```
+
+Nightly the same jobs run in order with `--days 10` and no `--dry-run`.
 
 ## Layout
 
@@ -50,6 +58,15 @@ data/dryrun/           gitignored job output when Supabase is unconfigured
    never write 500 rows of nulls.
 6. **The browser never writes** anything except watchlist/positions/alerts. The
    service-role key lives only in the Python side.
+7. **Corporate actions are detected on the OPEN, never the close.** An ex-date
+   opens already at the adjusted price; a crash is capped at the 10% circuit on
+   the open and does its falling intraday. Detecting on the close would have
+   adjusted away four real crashes (IEX, INDUSINDBK, CYIENT, ADANIENT) and
+   erased genuine 25%+ drawdowns. `PrvsClsgPric` is *not* adjusted by NSE and
+   must not be used for this.
+8. **Price-day candidates include weekends.** NSE runs a special live session on
+   Budget day, 1 February, even on a Saturday. Skipping it leaves a hole that
+   makes the next session look like a 2-4% corporate action.
 
 ## Scoring model
 
@@ -62,10 +79,28 @@ stock is making lower highs after a change-of-character. Red flags (promoter
 pledge > 20%, promoter holding down > 3pp over 4 quarters, 3y CFO < 50% of 3y
 PAT, auditor qualification) exclude rather than deduct.
 
+## Data sources
+
+| What | Source | Shape |
+|---|---|---|
+| Universe | `niftyindices.com/IndexConstituent/ind_nifty500list.csv` | one file, 500 rows |
+| Prices | NSE bhavcopy (`nsearchives.nseindia.com/content/cm/...`) | one file per session, whole market |
+| Benchmark | NSE index archive (`.../content/indices/ind_close_all_*.csv`) | one file per session, all indices |
+
+Bhavcopy beats the Yahoo chart endpoint structurally: one request covers every
+symbol for a day, where Yahoo is one request per symbol and starts returning
+429 within seconds of a burst. Both archives are immutable once published, so
+every fetch — and every 404 — is cached under `data/cache/`, which makes a
+re-run of a 760-day backfill cost no network at all.
+
+`sec_bhavdata_full_*.csv` additionally carries delivery percentage, a useful
+accumulation signal not yet wired in.
+
 ## Phase status
 
 - [x] **1 — Skeleton.** Schema, universe loader, web shell.
-- [ ] 2 — Prices + technicals + T-M
+- [x] **2 — Prices + technicals + T-M.** 247k price rows over 517 sessions,
+      split adjustment, 19 indicators, momentum score, screener table.
 - [ ] 3 — Zone engine + T-S (port `structural_poc.pine` SPL/SPH to Python)
 - [ ] 4 — Fundamentals scrapers + Q and V
 - [ ] 5 — Screener and stock detail UI
