@@ -1,1 +1,1 @@
-[{"symbol": "ITC", "date": "2026-09-02", "rule": "score_decayed", "message": "ITC has slipped to decile 5 \u2014 the entry case has weakened", "payload": {"decile": 5, "dedupe": 5, "severity": "action", "dedupe_key": "ITC:score_decayed:5"}, "seen": false}, {"symbol": "TATACHEM", "date": "2026-09-02", "rule": "score_decayed", "message": "TATACHEM has slipped to decile 3 \u2014 the entry case has weakened", "payload": {"decile": 3, "dedupe": 3, "severity": "action", "dedupe_key": "TATACHEM:score_decayed:3"}, "seen": false}]
+[]

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { HashRouter, Link, Route, Routes } from 'react-router-dom'
 import { TriangleAlert } from 'lucide-react'
-import type { ScreenerRow, ScreenerSnapshot } from './types'
-import { isConfigured } from './lib/supabase'
+import type { ScreenerRow } from './types'
+import { loadScreener } from './lib/load'
 import { Portfolio } from './pages/Portfolio'
 import { Screener } from './pages/Screener'
 import { StockDetail } from './pages/StockDetail'
@@ -10,18 +10,20 @@ import { StockDetail } from './pages/StockDetail'
 export default function App() {
   const [rows, setRows] = useState<ScreenerRow[]>([])
   const [asOf, setAsOf] = useState('')
+  const [source, setSource] = useState<'supabase' | 'snapshot'>('snapshot')
+  const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
-    fetch(`${import.meta.env.BASE_URL}scores-sample.json`)
-      .then((r) => r.json())
-      .then((snapshot: ScreenerSnapshot) => {
-        if (cancelled) return
-        setRows(snapshot.rows)
-        setAsOf(snapshot.as_of)
-        setLoading(false)
-      })
+    loadScreener().then(({ snapshot, source, error }) => {
+      if (cancelled) return
+      setRows(snapshot.rows)
+      setAsOf(snapshot.as_of)
+      setSource(source)
+      setError(error)
+      setLoading(false)
+    })
     return () => {
       cancelled = true
     }
@@ -54,19 +56,24 @@ export default function App() {
           </p>
         </header>
 
-        {!isConfigured && (
+        {source === 'snapshot' && (
           <div className="mb-6 flex gap-3 rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
             <div>
-              <p className="font-semibold">Supabase not configured</p>
+              <p className="font-semibold">
+                {error ? 'Live read failed — showing the exported snapshot' : 'Reading the exported snapshot'}
+              </p>
               <p className="mt-1">
-                Reading the exported snapshot. Add{' '}
-                <code className="font-mono">VITE_SUPABASE_URL</code> and{' '}
-                <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> to{' '}
-                <code className="font-mono">web/.env.local</code> for live data.
+                {error ??
+                  'Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to web/.env.local to read live.'}
               </p>
             </div>
           </div>
+        )}
+        {source === 'supabase' && (
+          <p className="mb-6 font-mono text-[11px] uppercase tracking-wider text-slate-500">
+            live from Supabase &middot; {rows.length} scored
+          </p>
         )}
 
         {loading ? (

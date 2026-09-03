@@ -226,16 +226,21 @@ def main(argv: list[str] | None = None) -> int:
             log.symbols_ok += 1
 
         log.rows_written = (
-            db.upsert("fundamentals_y", annual, on_conflict="symbol,fy")
+            db.upsert("fundamentals_y", annual, on_conflict="symbol,period_end")
             + db.upsert("fundamentals_q", quarterly, on_conflict="symbol,period_end")
             + db.upsert("shareholding", shareholding, on_conflict="symbol,quarter_end")
             + db.upsert("company_ratios", ratios, on_conflict="symbol")
         )
-        db.upsert(
-            "stocks",
-            [{"symbol": s, "company_type": t} for s, t in types.items()],
-            on_conflict="symbol",
-        )
+        # An UPDATE, not an upsert: an upsert sends the whole row and would
+        # null every column it does not mention, company_name included. Only
+        # two distinct values exist, so this is two statements.
+        for company_type in sorted(set(types.values())):
+            db.update_where_in(
+                "stocks",
+                {"company_type": company_type},
+                column="symbol",
+                matches=[s for s, t in types.items() if t == company_type],
+            )
 
         financial = sum(1 for t in types.values() if t == "financial")
         log.notes = (

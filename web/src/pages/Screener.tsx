@@ -272,7 +272,7 @@ function WeightSliders({
         onClick={() => onChange(DEFAULT_WEIGHTS)}
         className="mt-3 text-xs text-slate-500 underline underline-offset-2 hover:text-slate-800 dark:hover:text-slate-200"
       >
-        Reset to 45 / 20 / 35
+        Reset to 25 / 35 / 40
       </button>
       <p className="mt-2 text-xs text-slate-500">
         A starting suggestion, not a conclusion — the backtest should set these.

@@ -22,6 +22,61 @@ from .config import DATA_DIR, settings
 DRYRUN_DIR = DATA_DIR / "dryrun"
 
 
+# Stable sort keys for paginated reads. PostgREST's `range()` is OFFSET/LIMIT,
+# and OFFSET without ORDER BY has no defined row order: Postgres may return a
+# row on two pages or on none. Reading 311,232 price rows that way lost a
+# different, silent subset every time — the scored universe came out at 317,
+# then 310, then 295 from identical data, and nothing reported an error.
+#
+# Every paginated read is ordered by something unique.
+PAGE_ORDER = {
+    "stocks": ("symbol",),
+    "company_ratios": ("symbol",),
+    "index_membership": ("index_name", "week_start", "symbol"),
+    "prices_daily": ("symbol", "date"),
+    "technicals_daily": ("symbol", "date"),
+    "valuations_daily": ("symbol", "date"),
+    "scores_daily": ("symbol", "date"),
+    "ts_setups": ("symbol", "date"),
+    "fundamental_scores": ("symbol", "date"),
+    "fundamentals_q": ("symbol", "period_end"),
+    "fundamentals_y": ("symbol", "period_end"),
+    "shareholding": ("symbol", "quarter_end"),
+    "index_prices": ("index_name", "date"),
+    "support_zones": ("id",),
+    "zone_events": ("id",),
+    "watchlist": ("id",),
+    "positions": ("id",),
+    "alerts": ("id",),
+    "ingestion_runs": ("id",),
+    "backtest_runs": ("id",),
+    "backtest_trades": ("id",),
+}
+
+
+def _collapse_duplicates(
+    rows: Sequence[dict[str, Any]], on_conflict: str
+) -> list[dict[str, Any]]:
+    """Keep the last row per conflict key, preserving order.
+
+    Postgres refuses an INSERT ... ON CONFLICT that proposes the same key twice
+    in one statement — "cannot affect row a second time" — and rejects the
+    entire batch rather than the offending pair. One company with two rows for
+    the same key therefore cost all 500 companies' fundamentals.
+
+    Collapsing here means a duplicate is a fact about the data to be noticed,
+    not an outage.
+    """
+    keys = [k.strip() for k in on_conflict.split(",") if k.strip()]
+    if not keys:
+        return list(rows)
+
+    merged: dict[tuple, dict[str, Any]] = {}
+    for row in rows:
+        merged[tuple(str(row.get(k)) for k in keys)] = row
+    return list(merged.values())
+
+
 class Db:
     """Thin wrapper over supabase-py with a dry-run fallback."""
 
@@ -55,6 +110,9 @@ class Db:
         if not rows:
             return 0
 
+        if on_conflict:
+            rows = _collapse_duplicates(rows, on_conflict)
+
         if self.dry_run:
             self._dry_run_upsert(table, rows, on_conflict=on_conflict)
             return len(rows)
@@ -68,13 +126,17 @@ class Db:
     def _dry_run_upsert(
         self, table: str, rows: list[dict[str, Any]], *, on_conflict: str | None
     ) -> None:
-        """Merge into the local JSON the way a real upsert merges into a table.
+        """Mirror a real upsert: replace the matching row, keep the others.
 
-        Overwriting the file instead was a silent data-loss bug: a job that
-        wrote three `stocks` rows to record company_type replaced the whole
-        500-row universe, and the next job then ran against three symbols and
-        reported success. Dry-run has to behave like the database or it is not
-        a rehearsal of anything.
+        Two lessons are baked into this. Overwriting the whole file was silent
+        data loss — a job writing three `stocks` rows replaced the 500-row
+        universe and the next job reported success on three symbols. But
+        *merging fields within a row* was wrong in the other direction:
+        PostgREST replaces the entire row, so a partial write nulls every
+        column it omits. Dry-run merged them instead and hid a NOT NULL
+        violation that only appeared against the real database.
+
+        A rehearsal that is kinder than the performance is not a rehearsal.
         """
         DRYRUN_DIR.mkdir(parents=True, exist_ok=True)
         path = DRYRUN_DIR / f"{table}.json"
@@ -97,11 +159,8 @@ class Db:
 
             index = {identity(row): row for row in existing}
             for row in rows:
-                key = identity(row)
-                if key in index:
-                    index[key].update(row)      # merge, so partial writes add columns
-                else:
-                    index[key] = dict(row)
+                # Replace, never merge — this is what the database does.
+                index[identity(row)] = dict(row)
             merged = list(index.values())
 
         path.write_text(json.dumps(merged, indent=2, default=str))
@@ -135,6 +194,39 @@ class Db:
             self._client.table(table).insert(rows[start : start + 500]).execute()
         return len(rows)
 
+    def update_where_in(
+        self, table: str, values: dict[str, Any], *, column: str, matches: Sequence[Any]
+    ) -> int:
+        """Set a few columns on many rows, without touching the rest.
+
+        An upsert cannot do this: PostgREST sends the whole row, so every
+        column left out is written as NULL. Recording `company_type` on 500
+        stocks that way nulled `company_name` and the write was rejected. An
+        UPDATE changes only what it names.
+        """
+        matches = [m for m in matches if m is not None]
+        if not matches:
+            return 0
+
+        if self.dry_run:
+            path = DRYRUN_DIR / f"{table}.json"
+            if not path.exists():
+                return 0
+            existing = json.loads(path.read_text())
+            wanted = set(matches)
+            touched = 0
+            for row in existing:
+                if row.get(column) in wanted:
+                    row.update(values)
+                    touched += 1
+            path.write_text(json.dumps(existing, indent=2, default=str))
+            return touched
+
+        for start in range(0, len(matches), 200):
+            chunk = matches[start : start + 200]
+            self._client.table(table).update(values).in_(column, chunk).execute()
+        return len(matches)
+
     def update(self, table: str, values: dict[str, Any], *, where: dict[str, Any]) -> None:
         if self.dry_run:
             return
@@ -146,15 +238,47 @@ class Db:
     # -- reads -------------------------------------------------------
 
     def select(
-        self, table: str, columns: str = "*", *, where: dict[str, Any] | None = None
+        self,
+        table: str,
+        columns: str = "*",
+        *,
+        where: dict[str, Any] | None = None,
+        page_size: int = 1000,
     ) -> list[dict[str, Any]]:
+        """Read a whole table, paging through PostgREST's row cap.
+
+        PostgREST applies `max_rows` to every request — 1000 on this project —
+        and returns the first page with no error and no indication that more
+        exists. A single unpaged read therefore returned 1000 of 310,414 price
+        rows, `compute_technicals` processed two symbols instead of 486, and
+        every downstream job reported success on a fiftieth of the data. Silent
+        truncation is the worst shape a bug can take, so reads page until a
+        short page proves the end.
+        """
         if self.dry_run:
             path = DRYRUN_DIR / f"{table}.json"
             return json.loads(path.read_text()) if path.exists() else []
-        query = self._client.table(table).select(columns)
-        for column, value in (where or {}).items():
-            query = query.eq(column, value)
-        return query.execute().data
+
+        order_by = PAGE_ORDER.get(table)
+        if order_by is None:
+            raise KeyError(
+                f"no stable page order defined for {table!r}. Paging without one "
+                "silently loses rows; add it to PAGE_ORDER."
+            )
+
+        rows: list[dict[str, Any]] = []
+        start = 0
+        while True:
+            query = self._client.table(table).select(columns)
+            for column, value in (where or {}).items():
+                query = query.eq(column, value)
+            for column in order_by:
+                query = query.order(column)
+            page = query.range(start, start + page_size - 1).execute().data
+            rows.extend(page)
+            if len(page) < page_size:
+                return rows
+            start += page_size
 
     # -- run audit ---------------------------------------------------
 

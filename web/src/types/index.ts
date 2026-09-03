@@ -82,14 +82,23 @@ export interface StockDetail {
   shareholding: PeriodRecord[]
 }
 
-/** Blend weights the user can move. Defaults mirror the Python side. */
+/** Blend weights the user can move. */
 export interface Weights {
   quality: number
   value: number
   technical: number
 }
 
-export const DEFAULT_WEIGHTS: Weights = { quality: 45, value: 20, technical: 35 }
+/**
+ * Mirrors config.DEFAULT_BLEND_WEIGHTS on the Python side — keep them in step.
+ *
+ * Moved off the plan's 45/20/35 by the weight sweep, whose one significant
+ * result was that the quality pillar predicted the next six months negatively
+ * (IC -0.041, t = -2.48). This sits between the old weighting and the grid's
+ * winner: enough of a cut to stop paying for a pillar the evidence is against,
+ * not so much as to adopt a peak fitted to one regime.
+ */
+export const DEFAULT_WEIGHTS: Weights = { quality: 25, value: 35, technical: 40 }
 
 export interface Position {
   id: number | null

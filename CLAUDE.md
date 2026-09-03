@@ -72,8 +72,29 @@ Always diff `information_schema.tables where table_schema='public'` before and
 after to prove nothing leaked.
 
 PostgREST only serves schemas listed under **Settings → API → Exposed schemas**,
-so `n500` must be added there once. `python -m n500.jobs.doctor` reports that
-and every other setup problem.
+so `n500` must be added there once, and a hand-made schema needs the role
+grants Supabase applies automatically to `public` (migration 0005).
+`python -m n500.jobs.doctor` reports both, and every other setup problem.
+
+### Things the real database does that a dry run does not
+
+Every one of these passed in dry run and failed against Supabase.
+
+* **`max_rows` caps every read.** PostgREST returns the first 1,000 rows with
+  no error and no indication more exists. One unpaged read returned 1,000 of
+  311,232 price rows, `compute_technicals` processed two symbols instead of
+  486, and every downstream job reported success.
+* **Paging needs an ORDER BY.** `range()` is OFFSET/LIMIT, and OFFSET without
+  an order has no defined row order — Postgres may return a row twice or never.
+  The scored universe came out 317, then 310, then 295 from identical data.
+  `db.PAGE_ORDER` gives every table a unique sort key.
+* **An upsert replaces the whole row.** Columns left out are written as NULL.
+  Recording `company_type` on 500 stocks that way nulled `company_name`. Use
+  `db.update_where_in` for partial writes.
+* **`ON CONFLICT` needs a matching constraint,** and rejects a batch that
+  proposes the same key twice. `db.upsert` collapses duplicates; the annual
+  table is keyed on `(symbol, period_end)`, because `fy` is derived and not
+  unique when a company changes its year-end.
 
 ## Rules that the design depends on
 

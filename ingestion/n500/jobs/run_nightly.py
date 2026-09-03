@@ -120,29 +120,38 @@ def main(argv: list[str] | None = None) -> int:
     for name, status in outcomes.items():
         print(f"  {status:9} {name}")
 
+    _record(args.dry_run, outcomes, failed=failed, skipped=skipped)
+
     if failed or skipped:
         print(f"\n[{JOB}] {len(failed)} failed, {len(skipped)} skipped — the screener is "
               "showing older data for those parts, not wrong data")
-        _record_failure(args.dry_run, outcomes)
         return 1
 
     print(f"\n[{JOB}] all steps completed")
     return 0
 
 
-def _record_failure(dry_run: bool, outcomes: dict[str, str]) -> None:
-    """Leave a trace even when the failure was the orchestrator's own.
+def _record(
+    dry_run: bool, outcomes: dict[str, str], *, failed: list[str], skipped: list[str]
+) -> None:
+    """Write an ingestion_runs row for every run, not only the bad ones.
 
-    Every job writes its own ingestion_runs row, but a step that never started
-    writes nothing at all — and an absent row is indistinguishable from a job
-    that was never scheduled.
+    Recording failures alone leaves the last row permanently red: a later good
+    run writes nothing, so the health check keeps reporting a fault that was
+    fixed hours ago, and a check that cries wolf is one you learn to skip.
+
+    A step that never started also writes nothing of its own, and an absent row
+    is indistinguishable from a job that was never scheduled — which is the
+    whole reason this table exists.
     """
     try:
         db = Db(force_dry_run=dry_run)
         run_id = db.start_run(JOB)
         db.finish_run(
             run_id,
-            status="partial",
+            status="partial" if (failed or skipped) else "ok",
+            symbols_ok=sum(1 for s in outcomes.values() if s in ("ok", "tolerated")),
+            symbols_failed=len(failed) + len(skipped),
             errors=[{"symbol": name, "error": status}
                     for name, status in outcomes.items() if status in ("failed", "skipped")],
             notes="; ".join(f"{n}={s}" for n, s in outcomes.items()),

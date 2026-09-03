@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { createClient } from '@supabase/supabase-js'
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
@@ -12,6 +12,9 @@ export const isConfigured = Boolean(url && anonKey)
 // Settings -> API -> Exposed schemas.
 const schema = (import.meta.env.VITE_SUPABASE_SCHEMA as string | undefined) ?? 'n500'
 
-export const supabase: SupabaseClient | null = isConfigured
+// The type is inferred rather than annotated: SupabaseClient's default
+// generics pin the schema to "public", which a client on another schema does
+// not satisfy.
+export const supabase = isConfigured
   ? createClient(url!, anonKey!, { db: { schema } })
   : null
