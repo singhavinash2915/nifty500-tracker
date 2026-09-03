@@ -113,6 +113,13 @@ def cluster_supports(
     generous for a utility and far too tight for a small-cap that moves 5% a
     day. The tolerance is taken at each pivot's own bar, so a zone formed in a
     calm period is not widened by later turbulence.
+
+    The distance is measured against the cluster's *lowest* member, not the one
+    added last. Chaining off the last member is single-linkage clustering, and
+    with thirty-odd swing lows it walks a band all the way up the chart: on
+    UltraTech it produced a "support zone" 16% wide, which is not a level
+    anyone can place a stop against. Anchoring to the floor bounds every zone
+    to `tolerance` ATR by construction.
     """
     lows = sorted(support_pivots(pivots), key=lambda p: p.price)
     clusters: list[list[Pivot]] = []
@@ -121,7 +128,7 @@ def cluster_supports(
         local_atr = _atr_at(atr, pivot.index)
         if local_atr is None or local_atr <= 0:
             continue
-        if clusters and abs(pivot.price - clusters[-1][-1].price) <= tolerance * local_atr:
+        if clusters and abs(pivot.price - clusters[-1][0].price) <= tolerance * local_atr:
             clusters[-1].append(pivot)
         else:
             clusters.append([pivot])

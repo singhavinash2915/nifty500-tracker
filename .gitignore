@@ -9,3 +9,4 @@ dist/
 data/dryrun/
 data/cache/
 .DS_Store
+/web/public/stocks/

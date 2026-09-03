@@ -101,3 +101,21 @@ def test_dry_run_upsert_without_a_key_appends():
     from n500 import db as db_module
 
     assert db_module.Db(force_dry_run=True) is not None
+
+
+def test_replace_discards_what_was_there_before(tmp_path, monkeypatch):
+    """Support zones are recomputed from scratch and have no natural key.
+    Upserting them appended: the count climbed 9,045 -> 11,841 across two runs
+    and the stale rows drew a zone 16% wide that the current engine would
+    never produce."""
+    from n500 import db as db_module
+
+    monkeypatch.setattr(db_module, "DRYRUN_DIR", tmp_path)
+    database = db_module.Db(force_dry_run=True)
+
+    database.replace("support_zones", [{"symbol": "A", "floor_price": 1.0}], key="symbol")
+    database.replace("support_zones", [{"symbol": "A", "floor_price": 2.0}], key="symbol")
+
+    rows = database.select("support_zones")
+    assert len(rows) == 1, "a second run must not stack on the first"
+    assert rows[0]["floor_price"] == 2.0

@@ -102,12 +102,23 @@ def make_client() -> httpx.Client:
     )
 
 
-def _cache_path(symbol: str):
-    return CACHE_DIR / f"{symbol}.html"
+def _cache_path(symbol: str, *, consolidated: bool = True):
+    suffix = "" if consolidated else ".standalone"
+    return CACHE_DIR / f"{symbol}{suffix}.html"
 
 
-def cache_is_fresh(symbol: str, *, ttl_days: int = CACHE_TTL_DAYS) -> bool:
-    path = _cache_path(symbol)
+# A consolidated page whose newest annual column is older than this is not the
+# company's live reporting basis. Colgate's consolidated figures stop at 2010,
+# because it had subsidiaries then and reports standalone now; Abbott India's
+# consolidated page is empty outright. Both must fall through to standalone or
+# the screener silently loses 37 large, perfectly ordinary companies.
+STALE_AFTER_DAYS = 550
+
+
+def cache_is_fresh(
+    symbol: str, *, consolidated: bool = True, ttl_days: int = CACHE_TTL_DAYS
+) -> bool:
+    path = _cache_path(symbol, consolidated=consolidated)
     if not path.exists():
         return False
     age = datetime.now() - datetime.fromtimestamp(path.stat().st_mtime)
@@ -122,34 +133,65 @@ def fetch_html(
     use_cache: bool = True,
     pause: bool = True,
 ) -> str:
-    if use_cache and cache_is_fresh(symbol):
-        return _cache_path(symbol).read_text()
+    if use_cache and cache_is_fresh(symbol, consolidated=consolidated):
+        return _cache_path(symbol, consolidated=consolidated).read_text()
 
     variant = "consolidated/" if consolidated else ""
     response = client.get(BASE_URL.format(symbol=symbol, variant=variant))
 
     if response.status_code == 404:
-        # Some companies only file standalone accounts; retry once before
-        # concluding the symbol is gone.
-        if consolidated:
-            if pause:
-                time.sleep(random.uniform(MIN_PAUSE, MAX_PAUSE))
-            return fetch_html(
-                client, symbol, consolidated=False, use_cache=False, pause=pause
-            )
-        raise CompanyNotFound(f"{symbol}: no page on Screener")
+        raise CompanyNotFound(f"{symbol}: no {variant or 'standalone'} page on Screener")
 
     response.raise_for_status()
     html = response.text
     if "Quarterly Results" not in html:
         raise ScreenerError(f"{symbol}: page has no financials section")
 
-    _cache_path(symbol).parent.mkdir(parents=True, exist_ok=True)
-    _cache_path(symbol).write_text(html)
+    path = _cache_path(symbol, consolidated=consolidated)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(html)
 
     if pause:
         time.sleep(random.uniform(MIN_PAUSE, MAX_PAUSE))
     return html
+
+
+def is_usable(data: "Fundamentals", *, today: date | None = None) -> bool:
+    """Whether this reporting basis is the company's live one.
+
+    A consolidated page can exist, parse cleanly, and still be the wrong
+    answer: Colgate's consolidated figures end in 2010 and Abbott India's are
+    empty, because both report standalone now.
+    """
+    if not data.annual or not data.quarterly:
+        return False
+    today = today or date.today()
+    latest = max(r["period_end"] for r in data.annual)
+    return (today - latest).days <= STALE_AFTER_DAYS
+
+
+def load(client: httpx.Client, symbol: str, *, pause: bool = True) -> "Fundamentals":
+    """Fetch and parse a company on whichever basis it actually reports.
+
+    Consolidated first, because it is the right view for a group. Standalone
+    when consolidated is missing, unparsable, or stale.
+    """
+    consolidated_error: Exception | None = None
+    try:
+        data = parse(fetch_html(client, symbol, pause=pause), symbol)
+        if is_usable(data):
+            return data
+    except (ScreenerError, CompanyNotFound) as exc:
+        consolidated_error = exc
+
+    try:
+        standalone = parse(
+            fetch_html(client, symbol, consolidated=False, pause=pause), symbol
+        )
+    except (ScreenerError, CompanyNotFound) as exc:
+        raise consolidated_error or exc
+
+    return standalone
 
 
 # --- parsing ---------------------------------------------------------------
@@ -346,12 +388,33 @@ def parse(html: str, symbol: str) -> Fundamentals:
     return result
 
 
+# A margin this extreme is arithmetically possible for a company with tiny
+# revenue and large costs — OLAELEC, HONASA and CARTRADE all report one — so it
+# is not evidence of a broken parse. Beyond it, the number is not a percentage.
+IMPLAUSIBLE_MARGIN = 1000.0
+
+
 def _assert_sane(data: Fundamentals) -> None:
-    """Fail loudly on a layout change instead of writing rows of nulls."""
-    if len(data.annual) < 3:
-        raise ScreenerError(f"{data.symbol}: only {len(data.annual)} annual periods")
-    if len(data.quarterly) < 4:
-        raise ScreenerError(f"{data.symbol}: only {len(data.quarterly)} quarters")
+    """Fail loudly on a layout change — but only on a layout change.
+
+    The distinction matters more than it first appears. An assertion tuned to
+    "this company looks normal" rejects real ones: the first full sweep threw
+    away 49 companies, and every single one was legitimate. 38 were recent
+    listings with short histories (ATHERENERG, BHARTIHEXA), six were
+    loss-making names whose operating margin really is several hundred percent
+    negative (OLAELEC, HONASA), and five simply had fewer than four quarters
+    published.
+
+    So the checks below test whether Screener still renders the page we think
+    it does — tables present, revenue parsed as a number, shareholding summing
+    to a whole — and leave "unusual but real" alone. A sparse history is
+    recorded and passed downstream, where the scorers already refuse to compute
+    a CAGR they lack the years for.
+    """
+    if not data.annual:
+        raise ScreenerError(f"{data.symbol}: profit & loss table parsed to nothing")
+    if not data.quarterly:
+        raise ScreenerError(f"{data.symbol}: quarterly table parsed to nothing")
 
     revenues = [r["revenue"] for r in data.annual if r.get("revenue") is not None]
     if not revenues:
@@ -360,8 +423,11 @@ def _assert_sane(data: Fundamentals) -> None:
         raise ScreenerError(f"{data.symbol}: every annual revenue is non-positive")
 
     margins = [r["opm"] for r in data.annual if r.get("opm") is not None]
-    if margins and not all(-200 <= m <= 200 for m in margins):
-        raise ScreenerError(f"{data.symbol}: operating margin outside +/-200%")
+    if margins and all(abs(m) > IMPLAUSIBLE_MARGIN for m in margins):
+        raise ScreenerError(
+            f"{data.symbol}: every operating margin exceeds "
+            f"+/-{IMPLAUSIBLE_MARGIN:.0f}% — the column is probably not a percentage"
+        )
 
     for record in data.shareholding:
         total = sum(

@@ -21,6 +21,13 @@ from ..db import Db
 
 JOB = "export_snapshot"
 DEFAULT_OUT = REPO_ROOT / "web" / "public" / "scores-sample.json"
+DETAIL_DIR = REPO_ROOT / "web" / "public" / "stocks"
+
+# Two years of daily bars is what the zone engine reasons over, so it is what
+# the chart shows. Written as parallel arrays rather than an array of objects:
+# same information, roughly a third of the bytes, and each file is fetched on
+# its own when a stock is opened.
+DETAIL_BARS = 520
 
 
 def _clean(value):
@@ -131,23 +138,138 @@ def serialise(snapshot: dict) -> str:
     return json.dumps(snapshot, allow_nan=False)
 
 
+def build_details(db: Db, symbols: set[str]) -> dict[str, dict]:
+    """Per-symbol payloads for the stock detail page."""
+    prices = pd.DataFrame(db.select("prices_daily"))
+    if prices.empty:
+        return {}
+    prices["date"] = pd.to_datetime(prices["date"])
+    for column in ("open", "high", "low", "close", "adj_close", "volume"):
+        prices[column] = pd.to_numeric(prices[column], errors="coerce")
+
+    technicals = pd.DataFrame(db.select("technicals_daily"))
+    if not technicals.empty:
+        technicals["date"] = pd.to_datetime(technicals["date"])
+
+    zones = pd.DataFrame(db.select("support_zones"))
+    annual = pd.DataFrame(db.select("fundamentals_y"))
+    quarterly = pd.DataFrame(db.select("fundamentals_q"))
+    holding = pd.DataFrame(db.select("shareholding"))
+
+    by_symbol = dict(tuple(prices.groupby("symbol")))
+    zones_by = dict(tuple(zones.groupby("symbol"))) if not zones.empty else {}
+    annual_by = dict(tuple(annual.groupby("symbol"))) if not annual.empty else {}
+    quarterly_by = dict(tuple(quarterly.groupby("symbol"))) if not quarterly.empty else {}
+    holding_by = dict(tuple(holding.groupby("symbol"))) if not holding.empty else {}
+
+    out: dict[str, dict] = {}
+    for symbol in sorted(symbols):
+        frame = by_symbol.get(symbol)
+        if frame is None or frame.empty:
+            continue
+        frame = frame.sort_values("date").tail(DETAIL_BARS)
+
+        # Split-adjusted, so the chart matches what the indicators were computed on.
+        factor = (frame["adj_close"] / frame["close"]).fillna(1.0)
+        bars = {
+            "t": [d.strftime("%Y-%m-%d") for d in frame["date"]],
+            "o": [_num(v) for v in frame["open"] * factor],
+            "h": [_num(v) for v in frame["high"] * factor],
+            "l": [_num(v) for v in frame["low"] * factor],
+            "c": [_num(v) for v in frame["adj_close"]],
+            "v": [_num(v) for v in frame["volume"]],
+        }
+
+        # Moving averages are computed here from the full adjusted series, not
+        # read from technicals_daily. Two reasons: the stored table is often
+        # written with a short tail for speed, which leaves the chart with an
+        # empty overlay; and computing over the whole history means the 200DMA
+        # has a value on the first bar of the visible window instead of 200
+        # bars of nothing.
+        full = by_symbol[symbol].sort_values("date")
+        full_adjusted = full["adj_close"].astype("float64")
+        window = full_adjusted.tail(DETAIL_BARS)
+        overlays = {
+            "sma50": [_num(v) for v in full_adjusted.rolling(50, min_periods=50).mean().loc[window.index]],
+            "sma200": [_num(v) for v in full_adjusted.rolling(200, min_periods=200).mean().loc[window.index]],
+        }
+
+        live_zones = []
+        zframe = zones_by.get(symbol)
+        if zframe is not None:
+            for _, z in zframe.iterrows():
+                live_zones.append(
+                    {
+                        "timeframe": _clean(z.get("timeframe")),
+                        "source": _clean(z.get("source")),
+                        "floor": _num(z.get("floor_price")),
+                        "ceil": _num(z.get("ceil_price")),
+                        "touches": int(z.get("touch_count") or 0),
+                        "strength": _num(z.get("strength")),
+                        "formed_on": _clean(z.get("formed_on")),
+                        "invalidated_on": _clean(z.get("invalidated_on")),
+                    }
+                )
+
+        out[symbol] = {
+            "symbol": symbol,
+            "bars": bars,
+            "overlays": overlays,
+            "zones": live_zones,
+            "annual": _records(annual_by.get(symbol), "period_end",
+                               ["revenue", "ebitda", "pat", "eps", "cfo", "roce", "roe",
+                                "debt_equity", "debtor_days"]),
+            "quarterly": _records(quarterly_by.get(symbol), "period_end",
+                                  ["revenue", "pat", "opm", "eps"]),
+            "shareholding": _records(holding_by.get(symbol), "quarter_end",
+                                     ["promoter_pct", "fii_pct", "dii_pct", "public_pct"]),
+        }
+    return out
+
+
+def _records(frame, date_column: str, columns: list[str]) -> list[dict]:
+    if frame is None or frame.empty or date_column not in frame:
+        return []
+    frame = frame.sort_values(date_column)
+    rows = []
+    for _, row in frame.iterrows():
+        record = {"period": _clean(row[date_column])}
+        for column in columns:
+            record[column] = _num(row.get(column)) if column in frame else None
+        rows.append(record)
+    return rows
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Export the screener snapshot")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--detail-dir", type=Path, default=DETAIL_DIR)
+    parser.add_argument("--no-details", action="store_true")
     args = parser.parse_args(argv)
 
-    snapshot = build(Db(force_dry_run=args.dry_run))
+    db = Db(force_dry_run=args.dry_run)
+    snapshot = build(db)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(serialise(snapshot))
 
     rows = snapshot["rows"]
+    detail_count = 0
+    if not args.no_details:
+        details = build_details(db, {r["symbol"] for r in rows})
+        args.detail_dir.mkdir(parents=True, exist_ok=True)
+        for symbol, payload in details.items():
+            (args.detail_dir / f"{symbol}.json").write_text(serialise(payload))
+        detail_count = len(details)
+
     print(
         f"[{JOB}] {len(rows)} rows -> {args.out} "
         f"(as of {snapshot['as_of']}; "
         f"{sum(1 for r in rows if r['quality_score'] is not None)} with Q, "
         f"{sum(1 for r in rows if r['flags'])} carrying flags)"
     )
+    if detail_count:
+        print(f"[{JOB}] {detail_count} detail files -> {args.detail_dir}")
     return 0
 
 

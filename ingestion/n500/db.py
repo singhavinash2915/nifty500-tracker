@@ -101,6 +101,35 @@ class Db:
 
         path.write_text(json.dumps(merged, indent=2, default=str))
 
+    def replace(self, table: str, rows: Sequence[dict[str, Any]], *, key: str) -> int:
+        """Rewrite a wholly derived table, discarding what was there before.
+
+        Support zones are recomputed from scratch on every run and have no
+        natural key — the primary key is a bigserial. Upserting them without a
+        conflict target therefore *appends*: the zone count climbed from 9,045
+        to 11,841 across two runs, and the stale rows included bands from
+        before a clustering fix, so the chart drew a "support zone" spanning
+        16% of price that the current engine would never produce.
+
+        Deriving a table means replacing it, not adding to it.
+        """
+        rows = list(rows)
+        if self.dry_run:
+            DRYRUN_DIR.mkdir(parents=True, exist_ok=True)
+            (DRYRUN_DIR / f"{table}.json").write_text(
+                json.dumps(rows, indent=2, default=str)
+            )
+            return len(rows)
+
+        touched = sorted({row[key] for row in rows if row.get(key) is not None})
+        for start in range(0, len(touched), 200):
+            chunk = touched[start : start + 200]
+            self._client.table(table).delete().in_(key, chunk).execute()
+
+        for start in range(0, len(rows), 500):
+            self._client.table(table).insert(rows[start : start + 500]).execute()
+        return len(rows)
+
     def update(self, table: str, values: dict[str, Any], *, where: dict[str, Any]) -> None:
         if self.dry_run:
             return

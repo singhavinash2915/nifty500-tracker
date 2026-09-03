@@ -203,8 +203,7 @@ def main(argv: list[str] | None = None) -> int:
     with run(JOB, db=db) as log:
         for symbol in universe:
             try:
-                html = screener.fetch_html(client, symbol)
-                data = screener.parse(html, symbol)
+                data = screener.load(client, symbol)
             except CompanyNotFound:
                 missing.append(symbol)
                 log.error(symbol, "no Screener page (renamed, merged or demerged)")

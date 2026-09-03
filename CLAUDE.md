@@ -18,6 +18,7 @@ cd ingestion
 ../.venv/bin/python -m n500.jobs.compute_fundamental_scores --dry-run
 ../.venv/bin/python -m n500.jobs.compute_zones --dry-run
 ../.venv/bin/python -m n500.jobs.compute_scores --dry-run
+../.venv/bin/python -m n500.jobs.export_snapshot --dry-run   # writes web/public/
 
 ./.venv/bin/python -m pytest ingestion/tests -q    # from the repo root
 
@@ -95,6 +96,17 @@ data/dryrun/           gitignored job output when Supabase is unconfigured
 15. **Dry-run upsert merges by key.** Overwriting the file was silent data
     loss: a job writing three `stocks` rows replaced the 500-row universe, and
     the next job ran on three symbols and reported success.
+16. **A wholly derived table is replaced, never upserted.** `support_zones`
+    has a bigserial key, so upserting appended: the count climbed 9,045 ->
+    11,841 across two runs and the chart drew stale geometry. Use `db.replace`.
+17. **Cluster against the band floor, not the last member.** Single-linkage
+    chaining walked a "support zone" 16% up the chart on ULTRACEMCO.
+18. **Assertions catch layout changes, not unusual companies.** The first
+    sweep discarded 49 legitimate names — recent listings with short
+    histories, and loss-makers whose margins really are -450%.
+19. **Charts subscribe to the theme.** Reading `matchMedia` once at render
+    leaves the SVG painting light ink on a dark surface; CSS follows the theme
+    instantly and JavaScript-coloured marks do not.
 
 ## Scoring model
 
@@ -133,7 +145,9 @@ accumulation signal not yet wired in.
       fractal swings, volume shelves, ~9k zones, reversal confirmation, gates.
 - [x] **4 — Fundamentals + Q and V.** Screener.in scraper, red-flag gates,
       quality gate live on T-S, blended Q 45 / V 20 / technical 35.
-- [ ] 5 — Screener and stock detail UI
+- [x] **5 — Screener and stock detail UI.** Sortable screener with live blend
+      weights and a gate funnel; stock detail with price/zones/MA chart,
+      financial trends and shareholding.
 - [ ] 6 — Backtest engine
 - [ ] 7 — Positions, alerts, scheduling
 

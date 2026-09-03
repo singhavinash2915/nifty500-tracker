@@ -208,7 +208,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             log.symbols_ok += 1
 
-        log.rows_written = db.upsert("support_zones", zone_rows)
+        # Replaced, not upserted: zones are wholly recomputed each run and the
+        # table has no natural key, so upserting appends stale geometry.
+        log.rows_written = db.replace("support_zones", zone_rows, key="symbol")
         db.upsert("ts_setups", setup_rows, on_conflict="symbol,date")
 
         scored = sum(1 for r in setup_rows if r["ts_score"] is not None)

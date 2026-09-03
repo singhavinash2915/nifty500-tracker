@@ -301,3 +301,95 @@ def test_the_snapshot_refuses_to_serialise_nan():
         serialise({"rows": [{"company_type": float("nan")}]})
 
     assert serialise({"rows": [{"company_type": None}]})
+
+
+# --- sanity assertions ----------------------------------------------------
+
+
+def _fundamentals(**kw):
+    defaults = dict(
+        symbol="TEST", company_type="general",
+        annual=[{"period_end": date(2025, 3, 31), "revenue": 100.0, "opm": 12.0}],
+        quarterly=[{"period_end": date(2025, 6, 30), "revenue": 25.0}],
+    )
+    defaults.update(kw)
+    return screener.Fundamentals(**defaults)
+
+
+def test_a_short_history_is_accepted_not_rejected():
+    """The first full sweep discarded 49 companies and every one was
+    legitimate — 38 recent listings, six loss-makers, five with few quarters."""
+    screener._assert_sane(_fundamentals())
+
+
+def test_an_extreme_but_real_loss_making_margin_is_accepted():
+    """OLAELEC, HONASA and CARTRADE genuinely report margins of several
+    hundred percent negative."""
+    screener._assert_sane(
+        _fundamentals(annual=[
+            {"period_end": date(2025, 3, 31), "revenue": 10.0, "opm": -450.0},
+        ])
+    )
+
+
+def test_an_empty_table_still_fails_loudly():
+    with pytest.raises(screener.ScreenerError, match="parsed to nothing"):
+        screener._assert_sane(_fundamentals(annual=[]))
+    with pytest.raises(screener.ScreenerError, match="parsed to nothing"):
+        screener._assert_sane(_fundamentals(quarterly=[]))
+
+
+def test_a_column_that_is_not_a_percentage_fails():
+    with pytest.raises(screener.ScreenerError, match="not a percentage"):
+        screener._assert_sane(
+            _fundamentals(annual=[
+                {"period_end": date(2025, 3, 31), "revenue": 10.0, "opm": 45000.0},
+            ])
+        )
+
+
+def test_shareholding_that_does_not_sum_to_a_whole_fails():
+    with pytest.raises(screener.ScreenerError, match="sums to"):
+        screener._assert_sane(
+            _fundamentals(shareholding=[
+                {"period_end": date(2025, 6, 30), "promoter_pct": 30.0, "fii_pct": 10.0},
+            ])
+        )
+
+
+# --- reporting basis ------------------------------------------------------
+
+
+def test_a_stale_consolidated_page_is_not_usable():
+    """Colgate's consolidated figures stop at 2010 because it had subsidiaries
+    then and reports standalone now. Accepting that page silently loses the
+    company's entire recent history."""
+    stale = _fundamentals(
+        annual=[{"period_end": date(2010, 3, 31), "revenue": 100.0}],
+        quarterly=[{"period_end": date(2010, 6, 30), "revenue": 25.0}],
+    )
+    assert not screener.is_usable(stale, today=date(2026, 9, 2))
+
+
+def test_an_empty_consolidated_page_is_not_usable():
+    """Abbott India files standalone only; its consolidated tables are bare."""
+    assert not screener.is_usable(_fundamentals(annual=[]), today=date(2026, 9, 2))
+    assert not screener.is_usable(_fundamentals(quarterly=[]), today=date(2026, 9, 2))
+
+
+def test_a_current_consolidated_page_is_usable():
+    current = _fundamentals(
+        annual=[{"period_end": date(2026, 3, 31), "revenue": 100.0}],
+        quarterly=[{"period_end": date(2026, 6, 30), "revenue": 25.0}],
+    )
+    assert screener.is_usable(current, today=date(2026, 9, 2))
+
+
+def test_a_company_that_simply_has_not_filed_yet_is_still_usable():
+    """A March year-end filed in May is 17 months stale by the following
+    August, which is normal and must not trigger a pointless second fetch."""
+    lagging = _fundamentals(
+        annual=[{"period_end": date(2025, 3, 31), "revenue": 100.0}],
+        quarterly=[{"period_end": date(2026, 6, 30), "revenue": 25.0}],
+    )
+    assert screener.is_usable(lagging, today=date(2026, 8, 1))

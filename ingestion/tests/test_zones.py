@@ -364,3 +364,30 @@ def test_reward_risk_below_the_floor_scores_nothing():
     assert support._reward_risk_score(2.0) == 0.0
     assert support._reward_risk_score(None) == 0.0
     assert support._reward_risk_score(support.FULL_REWARD_RISK) == 100.0
+
+
+def test_clustering_does_not_chain_into_an_unbounded_band():
+    """Single-linkage chaining walked a zone 16% up the chart on UltraTech.
+    Each new member is measured against the cluster's floor, not its last
+    addition, so width is bounded by construction."""
+    frame = ohlc(np.full(300, 100.0))
+    atr = pd.Series(np.full(300, 2.0), index=frame.index)
+
+    ladder = [pivot(10 + i, 100.0 + i) for i in range(9)]
+    clusters = cluster_supports(ladder, atr, tolerance=0.6)
+
+    assert len(clusters) > 1, "the ladder must not collapse into one zone"
+    for cluster in clusters:
+        prices = [p.price for p in cluster]
+        assert max(prices) - min(prices) <= 0.6 * 2.0 + 1e-9
+
+
+def test_a_zone_stays_narrow_enough_to_place_a_stop_against():
+    frame = ohlc(np.concatenate([np.linspace(120, 100, 200), np.full(100, 100.0)]))
+    atr = atr_of(frame)
+    zones = build_zones(frame, atr, timeframe="daily")
+    last = float(frame["close"].iloc[-1])
+    for zone in zones:
+        if zone.source is ZoneSource.VOLUME_SHELF:
+            continue
+        assert zone.width / last < 0.10, f"{zone.floor}-{zone.ceil} spans too much of price"
