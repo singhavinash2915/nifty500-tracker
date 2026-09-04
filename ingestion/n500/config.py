@@ -32,18 +32,27 @@ load_dotenv(REPO_ROOT / ".env")
 # Quality's *gates* are unaffected. A red flag still excludes outright; what
 # changed is how much the quality score is paid in the blend.
 #
-# Revision and ownership enter at a deliberately modest weight. Neither has
-# been through the sweep yet — they are added because the theory behind them is
-# strong and the gap they fill is real, not because this sample has measured
-# them, and a pillar on theory alone does not get to outweigh one that has at
-# least been tested. Run `sweep_weights` once they have a history and let the
-# information coefficients set these properly.
+# Revision and ownership went through the sweep and both measured negative:
+# R at IC -0.045 (t -5.5) and O at -0.050 (t -3.7), overlap-corrected, and both
+# survive controlling for momentum. That is the opposite of what the theory
+# behind them predicts, and post-earnings drift is one of the most replicated
+# results in the literature, so the likeliest explanation is this particular
+# thirteen months rather than a durable inversion of it.
+#
+# Either way they are not paid for. A pillar the sample measures against does
+# not get weight on the strength of its story, and inverting them instead would
+# be fitting a single regime with more confidence than fourteen overlapping
+# windows can support. Both are still computed and still shown on the screener,
+# because a number worth watching is not the same as a number worth trading.
+#
+# So the blend stays on the three the sweep has actually seen, near its best
+# stable region (0/50/50) but not at the peak of a 67-candidate grid.
 DEFAULT_BLEND_WEIGHTS = {
-    "quality": 15.0,
-    "value": 25.0,
-    "technical": 35.0,
-    "revision": 17.0,
-    "ownership": 8.0,
+    "quality": 5.0,
+    "value": 45.0,
+    "technical": 50.0,
+    "revision": 0.0,
+    "ownership": 0.0,
 }
 
 

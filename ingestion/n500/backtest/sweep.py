@@ -38,6 +38,33 @@ MIN_PER_DECILE = 20
 # Minimum names on a date before a within-date correlation means anything.
 MIN_NAMES_PER_DATE = 30
 
+# Month-end rebalances against a six-month hold: each window shares five months
+# with the next one, so consecutive dates are not independent draws. Treating
+# them as independent is what makes a naive standard error too small — the
+# Newey-West correction below widens it by however much the per-date ICs are
+# actually autocorrelated, which is the honest bar for "significant".
+OVERLAP_LAG = 5
+
+
+def newey_west_se(values: np.ndarray, *, lag: int = OVERLAP_LAG) -> float:
+    """Standard error of a mean under serial correlation, Bartlett-weighted.
+
+    With overlapping holding periods the ordinary standard error of the mean
+    assumes fourteen independent observations where there are closer to three.
+    This is the standard fix, and it matters: the naive t on the resistance
+    features ran between 2.8 and 7, and the corrected one moves several of them
+    across the line in both directions.
+    """
+    n = len(values)
+    if n < 4:
+        return float("nan")
+    errors = values - values.mean()
+    variance = float(errors @ errors) / n
+    for k in range(1, min(lag, n - 1) + 1):
+        gamma = float(errors[k:] @ errors[:-k]) / n
+        variance += 2.0 * (1.0 - k / (lag + 1)) * gamma
+    return float(np.sqrt(max(variance, 1e-12) / n))
+
 
 def information_coefficient(panel: pd.DataFrame, scores: pd.Series) -> dict:
     """Mean within-date rank correlation of score against forward return.
@@ -70,14 +97,17 @@ def information_coefficient(panel: pd.DataFrame, scores: pd.Series) -> dict:
 
     values = np.array(per_date)
     mean = float(values.mean())
-    # Standard error of the mean across dates. Overlapping holding periods make
-    # the dates correlated, so this understates the true error — another reason
-    # to treat a t of 2 here as suggestive rather than settled.
-    se = float(values.std(ddof=1) / np.sqrt(len(values)))
+    # Two standard errors, and the wider one is the one to believe. The naive
+    # version treats each rebalance as an independent draw; they overlap by five
+    # months, so `nw` is what any claim of significance has to clear.
+    naive = float(values.std(ddof=1) / np.sqrt(len(values)))
+    nw = newey_west_se(values)
     return {
         "ic": mean,
-        "ic_se": se,
-        "ic_t": mean / se if se > 0 else np.nan,
+        "ic_se": nw if np.isfinite(nw) else naive,
+        "ic_se_naive": naive,
+        "ic_t": mean / nw if np.isfinite(nw) and nw > 0 else np.nan,
+        "ic_t_naive": mean / naive if naive > 0 else np.nan,
         "ic_positive_dates": float((values > 0).mean()),
         "dates": len(values),
     }
@@ -145,6 +175,7 @@ def feature_ic(panel: pd.DataFrame, features: dict[str, int] | None = None) -> p
                 "ic": stats["ic"],
                 "ic_se": stats["ic_se"],
                 "t": stats["ic_t"],
+                "t_naive": stats.get("ic_t_naive"),
                 "dates": stats["dates"],
                 "positive_dates": stats.get("ic_positive_dates", np.nan),
             }

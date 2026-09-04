@@ -136,17 +136,23 @@ def _report_features(features: pd.DataFrame) -> None:
     print(f"{'=' * 74}")
     print("  IC is signed the way the theory says it should point, so a positive")
     print("  number means the idea works as stated and a negative one means it")
-    print("  works backwards. A t below 2 means the sample cannot tell.\n")
+    print("  works backwards. t is Newey-West corrected for the fact that")
+    print("  six-month windows a month apart overlap by five months; the naive t")
+    print("  beside it is what the same data claims if you ignore that.\n")
 
-    print(f"  {'feature':<24} {'want':>4} {'IC':>7} {'t':>6} {'dates+':>7} {'n':>7}")
-    print(f"  {'-' * 60}")
+    print(f"  {'feature':<24} {'want':>4} {'IC':>7} {'t':>6} {'naive':>6} "
+          f"{'dates+':>7} {'n':>7}")
+    print(f"  {'-' * 68}")
     for _, row in features.iterrows():
         marker = "*" if abs(row["t"]) >= 2 else " "
         positive = row.get("positive_dates")
         share = f"{positive * 100:>6.0f}%" if pd.notna(positive) else "     —"
+        naive = row.get("t_naive")
+        naive_text = f"{naive:>+6.2f}" if pd.notna(naive) else "     —"
         print(
             f"{marker} {row['feature']:<24} {row['expected_sign']:>4} "
-            f"{row['ic']:>+7.3f} {row['t']:>+6.2f} {share} {int(row['n']):>7}"
+            f"{row['ic']:>+7.3f} {row['t']:>+6.2f} {naive_text} {share} "
+            f"{int(row['n']):>7}"
         )
 
     significant = features[features["t"].abs() >= 2]
