@@ -16,6 +16,7 @@ interface AuthState {
   session: Session | null
   loading: boolean
   signIn: (email: string) => Promise<{ error: string | null }>
+  verifyCode: (email: string, code: string) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
 }
 
@@ -23,6 +24,7 @@ const Ctx = createContext<AuthState>({
   session: null,
   loading: true,
   signIn: async () => ({ error: 'auth is not configured' }),
+  verifyCode: async () => ({ error: 'auth is not configured' }),
   signOut: async () => {},
 })
 
@@ -58,6 +60,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // router takes over from there.
           emailRedirectTo: window.location.origin + import.meta.env.BASE_URL,
         },
+      })
+      return { error: error?.message ?? null }
+    },
+    /**
+     * Sign in with the six-digit code instead of the link.
+     *
+     * Tapping a link from an email or chat app opens it inside *that app's*
+     * embedded browser, which keeps its own storage — so the session lands
+     * somewhere Safari cannot see and the real browser still shows a sign-in
+     * screen. A code you type is immune: it signs in whatever browser you are
+     * already looking at.
+     */
+    async verifyCode(email: string, code: string) {
+      if (!supabase) return { error: 'auth is not configured' }
+      const { error } = await supabase.auth.verifyOtp({
+        email,
+        token: code.trim(),
+        type: 'email',
       })
       return { error: error?.message ?? null }
     },
