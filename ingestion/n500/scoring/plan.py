@@ -66,6 +66,20 @@ VOLATILITY_STOP_ATR = 2.5
 # cannot move the portfolio even when it works.
 MAX_STOP_PCT = 0.30
 
+# No single position gets more of the account than this, whatever the stop says.
+#
+# Risk-unit sizing has a failure mode that only appears once it is run down a
+# ranked list rather than applied to one idea. Shares = unit / (price - stop),
+# so a stop 4% away buys a position worth 25% of capital for the same 1% of
+# risk; the first three names on a shortlist then consume the whole account.
+#
+# The arithmetic is right and the conclusion is wrong, because it assumes the
+# stop is the only way to lose. A gap through it on bad news does not respect
+# the level, and a 25% position gapping 15% loses 3.75% of capital on a trade
+# sized to risk 1%. So the position is capped and the risk taken falls below a
+# full unit, which is the correct trade-off rather than a compromise.
+MAX_POSITION_PCT = 0.10
+
 # Move the stop to breakeven once the position is up this many multiples of its
 # initial risk. Standard practice and the one adjustment that is nearly always
 # right: a position that can no longer lose money changes what you can do with
@@ -189,17 +203,32 @@ def build(
     )
 
 
-def quantity_for(portfolio_value: float, entry: float, stop: float, *, risk_pct: float = 0.01) -> int:
-    """Shares to buy so that being wrong costs `risk_pct` of the book.
+def quantity_for(
+    portfolio_value: float,
+    entry: float,
+    stop: float,
+    *,
+    risk_pct: float = 0.01,
+    max_position_pct: float = MAX_POSITION_PCT,
+) -> int:
+    """Shares to buy so that being wrong costs `risk_pct` of capital.
 
     The single most useful line in this module, and the one most often skipped.
     Sizing by rupees makes every position an equal *bet size* and a wildly
-    unequal *bet*: the two current holdings are within a third of each other in
-    value while one risks five times as much to its stop. Sizing by risk makes a
-    wide stop produce a small position automatically, which is the behaviour you
-    want and will not reliably do by hand.
+    unequal *bet*: two of the current holdings are within a third of each other
+    in value while one risks five times as much to its stop. Sizing by risk makes
+    a wide stop produce a small position automatically, which is the behaviour
+    you want and will not reliably do by hand.
+
+    Two limits, and whichever binds first wins. `max_position_pct` is the one
+    that is easy to forget and it matters most exactly where the signal is
+    strongest — a tight stop is what a stock pressed against support or
+    resistance produces, so the names the model likes are the ones risk-unit
+    sizing wants to buy enormous amounts of.
     """
     risk_per_share = entry - stop
-    if risk_per_share <= 0 or portfolio_value <= 0:
+    if risk_per_share <= 0 or portfolio_value <= 0 or entry <= 0:
         return 0
-    return int((portfolio_value * risk_pct) // risk_per_share)
+    by_risk = (portfolio_value * risk_pct) // risk_per_share
+    by_cap = (portfolio_value * max_position_pct) // entry
+    return int(min(by_risk, by_cap))

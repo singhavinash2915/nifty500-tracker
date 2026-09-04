@@ -85,18 +85,52 @@ class TestPlan:
 
 class TestSizing:
     def test_size_falls_as_the_stop_widens(self):
-        tight = plan.quantity_for(1_000_000, entry=100.0, stop=95.0)
-        wide = plan.quantity_for(1_000_000, entry=100.0, stop=80.0)
+        # Stops chosen so the position cap does not bind — a 5% stop used to be
+        # the example here and now gets capped, which is the point of the cap
+        # rather than a problem with it.
+        tight = plan.quantity_for(1_000_000, entry=100.0, stop=85.0)
+        wide = plan.quantity_for(1_000_000, entry=100.0, stop=75.0)
         assert tight > wide
-        # 1% of 10 lakh is 10,000; risking 5 a share buys 2,000 shares.
-        assert tight == 2000
-        assert wide == 500
+        # 1% of 10 lakh is 10,000; risking 15 a share buys 666 shares.
+        assert tight == 666
+        assert wide == 400
 
     def test_the_rupee_risk_is_the_same_either_way(self):
-        # The whole point: different position sizes, identical money at stake.
-        for stop in (95.0, 90.0, 80.0):
+        # The whole point: different position sizes, identical money at stake —
+        # for as long as the position cap leaves room for a full unit.
+        for stop in (85.0, 80.0, 75.0):
             qty = plan.quantity_for(1_000_000, entry=100.0, stop=stop)
             assert abs(qty * (100.0 - stop) - 10_000) <= 100.0
 
     def test_a_stop_above_the_entry_buys_nothing(self):
         assert plan.quantity_for(1_000_000, entry=100.0, stop=105.0) == 0
+
+    def test_a_tight_stop_is_capped_by_position_size(self):
+        """The failure mode that only shows up on a ranked list.
+
+        A stop 1% away wants 100% of the account for one risk unit. Risk-unit
+        sizing says yes; the cap says 10%, and it is the cap that is right —
+        the stop is not the only way to lose, and a gap straight through it
+        does not care how the position was sized.
+        """
+        shares = plan.quantity_for(1_000_000, entry=100.0, stop=99.0)
+        assert shares * 100.0 == pytest.approx(1_000_000 * plan.MAX_POSITION_PCT)
+
+    def test_the_cap_binds_hardest_where_the_signal_is_strongest(self):
+        # A stock pressed against a level has a tight stop by construction, so
+        # exactly the names the model likes are the ones naive sizing oversizes.
+        tight = plan.quantity_for(1_000_000, entry=100.0, stop=99.0) * 100.0
+        loose = plan.quantity_for(1_000_000, entry=100.0, stop=80.0) * 100.0
+        assert tight == pytest.approx(100_000)      # capped
+        assert loose == pytest.approx(50_000)       # risk-limited, well inside
+
+    def test_risk_taken_falls_below_a_unit_when_capped(self):
+        shares = plan.quantity_for(1_000_000, entry=100.0, stop=99.0)
+        assert shares * (100.0 - 99.0) < 10_000, "a capped position risks less than a unit"
+
+    def test_the_cap_can_be_relaxed_deliberately(self):
+        wide = plan.quantity_for(1_000_000, entry=100.0, stop=99.0, max_position_pct=1.0)
+        assert wide * (100.0 - 99.0) == pytest.approx(10_000)
+
+    def test_a_zero_entry_price_buys_nothing_rather_than_dividing_by_it(self):
+        assert plan.quantity_for(1_000_000, entry=0.0, stop=-1.0) == 0

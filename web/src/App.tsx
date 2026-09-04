@@ -6,6 +6,7 @@ import { useAuth } from './lib/auth'
 import { loadScreener } from './lib/load'
 import { Portfolio } from './pages/Portfolio'
 import { Screener } from './pages/Screener'
+import { Shortlist } from './pages/Shortlist'
 import { SignIn } from './pages/SignIn'
 import { StockDetail } from './pages/StockDetail'
 
@@ -43,6 +44,12 @@ export default function App() {
           <div className="mt-2 flex flex-wrap items-baseline gap-x-4">
             <Link to="/" className="text-3xl font-bold tracking-tight hover:opacity-80">
               Nifty 500 Conviction Tracker
+            </Link>
+            <Link
+              to="/shortlist"
+              className="text-sm text-slate-500 underline underline-offset-4 hover:text-slate-900 dark:hover:text-slate-100"
+            >
+              Buy list
             </Link>
             <Link
               to="/portfolio"
@@ -99,6 +106,21 @@ export default function App() {
                 and zone — stays open to anyone with the link; the holdings do
                 not. The real withholding is migration 0016's grants, so this
                 is the courtesy of a password box rather than the lock itself. */}
+            {/* Gated for the same reason as the holdings: it sizes against
+                capital and excludes what is already owned, so the page reveals
+                both. */}
+            <Route
+              path="/shortlist"
+              element={
+                authLoading ? (
+                  <p className="text-sm text-slate-500">Checking…</p>
+                ) : session ? (
+                  <Shortlist rows={rows} />
+                ) : (
+                  <SignIn />
+                )
+              }
+            />
             <Route
               path="/portfolio"
               element={

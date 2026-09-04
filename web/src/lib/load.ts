@@ -565,6 +565,39 @@ function insightsFor(
 }
 
 
+/**
+ * Every symbol's suggested plan, for sizing a shortlist.
+ *
+ * One request rather than 494. The plan columns live on ts_setups because they
+ * are computed with the zones; the screener rows come from scores_daily, so
+ * anything wanting both has to join them here.
+ */
+export async function loadPlans(): Promise<
+  Map<string, { stop: number | null; target: number | null; reward_risk: number | null; basis: string | null }>
+> {
+  const out = new Map<string, { stop: number | null; target: number | null; reward_risk: number | null; basis: string | null }>()
+  if (!supabase) return out
+
+  const { data, error } = await supabase
+    .from('ts_setups')
+    .select('symbol,date,plan_stop,plan_target,plan_reward_risk,plan_stop_basis')
+    .order('date', { ascending: false })
+    .limit(1000)
+  if (error || !data?.length) return out
+
+  const latest = data[0].date
+  for (const r of data) {
+    if (r.date !== latest || out.has(r.symbol)) continue
+    out.set(r.symbol, {
+      stop: r.plan_stop === null ? null : Number(r.plan_stop),
+      target: r.plan_target === null ? null : Number(r.plan_target),
+      reward_risk: r.plan_reward_risk === null ? null : Number(r.plan_reward_risk),
+      basis: r.plan_stop_basis ?? null,
+    })
+  }
+  return out
+}
+
 /** The overhead read for one symbol: nearest resistance and how price behaved at it. */
 export interface Overhead {
   floor: number | null
