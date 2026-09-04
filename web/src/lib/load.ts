@@ -328,6 +328,17 @@ export interface PositionView {
   failed_gates: string[]
   thesis_intact: boolean | null
   zone_floor: number | null
+  /** Suggested stop for any stock, not only one with a live setup. */
+  plan_stop: number | null
+  plan_stop_basis: string | null
+  plan_target: number | null
+  plan_reward_risk: number | null
+  /** Profit measured in units of the risk taken at entry. */
+  r_multiple: number | null
+  /** Set once the position is up 1R and the stop is still below cost. */
+  move_stop_to: number | null
+  days_held: number | null
+  sector: string | null
   /** Rupees at risk here as a share of the whole book's market value. */
   risk_share: number | null
   /** This position's market value as a share of the book. */
@@ -335,6 +346,8 @@ export interface PositionView {
   /** Short sentences describing what needs attention, most urgent first. */
   insights: { tone: 'bad' | 'warn' | 'good'; text: string }[]
 }
+
+const n = (v: unknown) => (v === null || v === undefined ? null : Number(v))
 
 function mark(p: any, close: number, score: any, setup: any): PositionView {
   const entry = Number(p.entry_price)
@@ -368,10 +381,31 @@ function mark(p: any, close: number, score: any, setup: any): PositionView {
     failed_gates: failed,
     thesis_intact: score ? failed.length === 0 : null,
     zone_floor: setup?.zone_floor ?? null,
+    plan_stop: n(setup?.plan_stop),
+    plan_stop_basis: setup?.plan_stop_basis ?? null,
+    plan_target: n(setup?.plan_target),
+    plan_reward_risk: n(setup?.plan_reward_risk),
+    r_multiple: null,
+    move_stop_to: null,
+    days_held: p.entry_date
+      ? Math.round((Date.now() - new Date(p.entry_date).getTime()) / 86_400_000)
+      : null,
+    sector: null,
     risk_share: null,
     weight: null,
     insights: [],
   }
+
+  // R multiple against whichever stop is actually governing the position: the
+  // one recorded at entry if there is one, the suggested one otherwise. Without
+  // this a holding with no stop recorded has no risk unit and cannot be
+  // compared with the rest of the book at all.
+  const governing = view.stop_price ?? view.plan_stop
+  if (governing !== null && has && entry > governing) {
+    view.r_multiple = Number(((close - entry) / (entry - governing)).toFixed(2))
+    if (view.r_multiple >= 1 && governing < entry) view.move_stop_to = entry
+  }
+  view.sector = score?.stocks?.sector ?? null
 
   view.insights = insightsFor(view, setup)
   return view
@@ -402,6 +436,9 @@ function withRiskShares(positions: PositionView[]): PositionView[] {
   return positions
 }
 
+const pctText = (v: number | null) =>
+  v === null ? 'no change' : `${(v * 100).toFixed(1)}%`
+
 /** Ordered by what should worry you most, not by what is easiest to compute. */
 const RISK_UNIT_LIMIT = 0.02
 
@@ -428,6 +465,24 @@ function insightsFor(
     return out
   }
 
+  if (v.stop_price === null && v.plan_stop !== null) {
+    out.push({
+      tone: 'warn',
+      text: `No stop recorded. The engine suggests ${v.plan_stop.toFixed(2)} (${v.plan_stop_basis}) — until one is set, the position has no defined risk and cannot be sized against the rest of the book.`,
+    })
+  }
+  if (v.move_stop_to !== null) {
+    out.push({
+      tone: 'good',
+      text: `Up more than 1R. Moving the stop to ${v.move_stop_to.toFixed(2)} makes this position unable to lose money.`,
+    })
+  }
+  if (v.days_held !== null && v.days_held > 180 && (v.return_pct ?? 0) < 0.05) {
+    out.push({
+      tone: 'warn',
+      text: `Held ${Math.round(v.days_held / 30)} months for ${pctText(v.return_pct)}. The thesis was a six-month one; dead money costs more than losses in a strategy that needs its winners.`,
+    })
+  }
   if (v.failed_gates.length) {
     out.push({
       tone: 'bad',

@@ -152,13 +152,44 @@ export function Portfolio() {
                   <Cell label="Close" value={p.close?.toFixed(2) ?? '—'}
                         hint={p.weight === null ? undefined : `${(p.weight * 100).toFixed(0)}% weight`} />
                   <Cell label="P&L" value={p.pnl === null ? '—' : `₹${p.pnl.toLocaleString('en-IN', {maximumFractionDigits: 0})}`} />
-                  <Cell label="Stop" value={p.stop_price?.toFixed(2) ?? '—'}
-                        hint={p.stop_distance_pct === null ? undefined : `${pct(p.stop_distance_pct, 0)} away`} />
+                  <Cell label="Stop"
+                        value={(p.stop_price ?? p.plan_stop)?.toFixed(2) ?? '—'}
+                        hint={
+                          p.stop_price === null && p.plan_stop !== null
+                            ? `suggested · ${p.plan_stop_basis}`
+                            : p.stop_distance_pct === null
+                              ? undefined
+                              : `${pct(p.stop_distance_pct, 0)} away`
+                        } />
                   <Cell label="Still at risk"
                         value={p.risk_remaining === null ? '—' : `₹${Math.max(p.risk_remaining, 0).toLocaleString('en-IN', {maximumFractionDigits: 0})}`}
                         hint={p.risk_share === null ? undefined : `${(p.risk_share * 100).toFixed(1)}% of the book`} />
                   <Cell label="Score" value={p.blended?.toFixed(0) ?? '—'}
                         hint={p.decile === null ? undefined : `decile ${p.decile}`} />
+                </dl>
+
+                {/* The plan, separate from the marks above: what to do rather
+                    than what happened. Shown for every holding, since the
+                    engine now has a stop and a target for every symbol. */}
+                <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 border-t border-slate-200 pt-3 text-sm sm:grid-cols-4 dark:border-slate-800">
+                  <Cell
+                    label="Next resistance"
+                    value={p.plan_target?.toFixed(2) ?? '—'}
+                    hint={
+                      p.plan_target && p.close
+                        ? `${pct(p.plan_target / p.close - 1, 0)} up · scale, don't exit`
+                        : undefined
+                    }
+                  />
+                  <Cell label="Reward : risk" value={
+                    p.plan_reward_risk ? `${p.plan_reward_risk.toFixed(1)}:1` : '—'
+                  } />
+                  <Cell label="R multiple" value={
+                    p.r_multiple === null ? '—' : `${p.r_multiple > 0 ? '+' : ''}${p.r_multiple.toFixed(1)}R`
+                  } hint="profit in units of risk taken" />
+                  <Cell label="Held" value={
+                    p.days_held === null ? '—' : `${p.days_held}d`
+                  } hint={p.days_held === null ? undefined : `of ~180`} />
                 </dl>
 
                 {p.thesis && (

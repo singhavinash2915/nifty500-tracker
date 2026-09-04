@@ -20,9 +20,9 @@ import pandas as pd
 
 from .. import indicators as ind
 from ..db import Db, run
-from ..scoring import support
+from ..scoring import plan, support
 from ..zones import reversal
-from ..zones.build import build_zones, live_zones_above
+from ..zones.build import build_zones, live_zones_above, live_zones_below
 from ..zones.pivots import find_pivots
 from .compute_technicals import MIN_BARS, adjusted_frame
 
@@ -191,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
 
             overhead = _overhead(daily, zones["daily"], setup)
+            suggested = _plan(daily, zones["daily"])
             setup_rows.append(
                 {
                     "symbol": symbol,
@@ -210,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
                     "zone_floor": setup.zone.floor if setup.zone else None,
                     "zone_ceil": setup.zone.ceil if setup.zone else None,
                     "zone_timeframe": setup.zone.timeframe if setup.zone else None,
+                    **suggested,
                     **overhead,
                 }
             )
@@ -232,6 +234,40 @@ def main(argv: list[str] | None = None) -> int:
     mode = "dry run" if db.dry_run else "Supabase"
     print(f"[{JOB}] {summary} ({mode})")
     return 0
+
+
+def _plan(daily: pd.DataFrame, zones: list) -> dict:
+    """A stop and a target for every symbol, whether or not it has a setup.
+
+    `support.evaluate` produces these only for a stock sitting at a zone with a
+    confirmed reversal — two names on a typical day. The other 492, and every
+    position already open, had no answer to "where does the stop go?", which is
+    most of the times the question gets asked.
+    """
+    index = len(daily) - 1
+    price = float(daily["close"].iloc[index])
+    atr = ind.atr(daily["high"], daily["low"], daily["close"], 14)
+    atr_value = float(atr.iloc[index]) if not pd.isna(atr.iloc[index]) else 0.0
+    if price <= 0 or atr_value <= 0:
+        return {}
+
+    below = live_zones_below(zones, price, at_index=index)
+    above = live_zones_above(zones, price, at_index=index)
+
+    built = plan.build(
+        price,
+        atr_value,
+        zone_floor=below[0].floor if below else None,
+        resistance=above[0].floor if above else None,
+    )
+    return {
+        "plan_stop": built.stop,
+        "plan_stop_basis": built.stop_basis,
+        "plan_stop_pct": built.stop_pct,
+        "plan_target": built.target,
+        "plan_reward_risk": built.reward_risk,
+        "plan_note": built.note,
+    }
 
 
 def _overhead(daily: pd.DataFrame, zones: list, setup) -> dict:
