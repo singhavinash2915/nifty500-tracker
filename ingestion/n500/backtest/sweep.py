@@ -83,18 +83,109 @@ def information_coefficient(panel: pd.DataFrame, scores: pd.Series) -> dict:
     }
 
 
+# Every feature worth putting on trial individually, with the direction the
+# theory behind it predicts. `sign` is +1 where high values should mean high
+# forward returns and -1 where they should mean low ones; the reported IC is
+# always signed as stated, so a feature that works reads positive whichever way
+# round it is measured, and one that works *backwards* reads clearly negative.
+FEATURES: dict[str, int] = {
+    "quality_score": +1,
+    "value_score": +1,
+    "revision_score": +1,
+    "ownership_score": +1,
+    "tm_score": +1,
+    "ts_score": +1,
+    "sue_pat": +1,
+    "sue_revenue": +1,
+    "accel_pat": +1,
+    "margin_revision": +1,
+    "consistency": +1,
+    "promoter_delta_4q": +1,
+    "fii_delta_4q": +1,
+    "dii_delta_4q": +1,
+    # The resistance work. A strong level overhead should cap the move; room to
+    # it should help; a failed breakout should hurt.
+    "resistance_strength": -1,
+    "headroom": +1,
+    "false_breakout": -1,
+    "rejected_at_resistance": -1,
+    "zone_respect": +1,
+    "zone_strength": +1,
+    # Not a signal — a check that the liquidity gate is not quietly a size bet.
+    "turnover_60d_cr": +1,
+}
+
+
+def feature_ic(panel: pd.DataFrame, features: dict[str, int] | None = None) -> pd.DataFrame:
+    """Information coefficient for each feature on its own.
+
+    This is the honest test of a new idea, and a different question from the
+    weight sweep. The sweep asks which *combination* ranks best, which on
+    fourteen overlapping dates will always find something; this asks whether one
+    number, measured across every observation, carries any information at all.
+    A feature that cannot clear a t of 2 on its own has not earned a weight,
+    however good the story behind it.
+
+    Rows come back ordered by t, and `signed` is the correlation oriented the
+    way the theory says it should point.
+    """
+    rows = []
+    for name, sign in (features or FEATURES).items():
+        if name not in panel:
+            continue
+        values = pd.to_numeric(panel[name], errors="coerce")
+        if values.notna().sum() < MIN_NAMES_PER_DATE:
+            continue
+        stats = information_coefficient(panel, values * sign)
+        rows.append(
+            {
+                "feature": name,
+                "expected_sign": "+" if sign > 0 else "-",
+                "n": int(values.notna().sum()),
+                "ic": stats["ic"],
+                "ic_se": stats["ic_se"],
+                "t": stats["ic_t"],
+                "dates": stats["dates"],
+                "positive_dates": stats.get("ic_positive_dates", np.nan),
+            }
+        )
+
+    frame = pd.DataFrame(rows)
+    return frame.sort_values("t", ascending=False).reset_index(drop=True) if len(frame) else frame
+
+
+PILLARS = ("quality", "value", "revision", "ownership", "technical")
+
+
 @dataclass(frozen=True)
 class Candidate:
     quality: float
     value: float
     technical: float
+    revision: float = 0.0
+    ownership: float = 0.0
 
     @property
     def label(self) -> str:
-        return f"{self.quality:.0f}/{self.value:.0f}/{self.technical:.0f}"
+        """Three parts while the newer pillars are unused, five once they are.
+
+        Keeping the short form means every label in the existing sweep output
+        still reads the same, so results from before the two new pillars
+        existed remain comparable to results from after.
+        """
+        head = f"{self.quality:.0f}/{self.value:.0f}/{self.technical:.0f}"
+        if self.revision or self.ownership:
+            return f"{head}/{self.revision:.0f}/{self.ownership:.0f}"
+        return head
 
     def as_dict(self) -> dict[str, float]:
-        return {"quality": self.quality, "value": self.value, "technical": self.technical}
+        return {
+            "quality": self.quality,
+            "value": self.value,
+            "technical": self.technical,
+            "revision": self.revision,
+            "ownership": self.ownership,
+        }
 
 
 def grid(
@@ -130,8 +221,10 @@ def blend_panel(panel: pd.DataFrame, candidate: Candidate) -> pd.Series:
         ("quality_score", candidate.quality),
         ("value_score", candidate.value),
         ("technical", candidate.technical),
+        ("revision_score", candidate.revision),
+        ("ownership_score", candidate.ownership),
     ):
-        if weight <= 0:
+        if weight <= 0 or column not in panel:
             continue
         values = pd.to_numeric(panel[column], errors="coerce")
         weighted += values.fillna(0.0) * weight
@@ -181,6 +274,8 @@ def evaluate(panel: pd.DataFrame, candidate: Candidate) -> dict:
         "quality": candidate.quality,
         "value": candidate.value,
         "technical": candidate.technical,
+        "revision": candidate.revision,
+        "ownership": candidate.ownership,
         **information_coefficient(panel, blend_panel(panel, candidate)),
         "median_rho": verdict["median_rho"],
         "hit_rho": verdict["hit_rate_rho"],

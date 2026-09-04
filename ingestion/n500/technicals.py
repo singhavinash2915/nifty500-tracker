@@ -21,7 +21,12 @@ TECHNICAL_COLUMNS = [
     "rsi14", "macd_hist", "adx14", "atr14", "atr_pct",
     "ret_1m", "ret_3m", "ret_6m", "ret_12m", "mom_12_1",
     "rs_vs_index", "dist_52w_high", "vol_ratio_20_100", "max_dd_6m",
+    "turnover_60d_cr",
 ]
+
+# A quarter's worth of sessions. Long enough that one block deal does not set
+# the number, short enough to notice a stock going quiet.
+LIQUIDITY_WINDOW = 60
 
 
 def compute(prices: pd.DataFrame, *, index_close: pd.Series | None = None) -> pd.DataFrame:
@@ -63,6 +68,13 @@ def compute(prices: pd.DataFrame, *, index_close: pd.Series | None = None) -> pd
     out["dist_52w_high"] = ind.distance_from_high(close, high, YEAR)
     out["vol_ratio_20_100"] = ind.volume_ratio(volume, 20, 100)
     out["max_dd_6m"] = ind.max_drawdown(close, HALF_YEAR)
+
+    # Median rather than mean daily traded value, in crore. The mean is set by
+    # the one day a block deal crossed and would call a stock liquid on the
+    # strength of a trade you could never have been part of.
+    out["turnover_60d_cr"] = (
+        (close * volume / 1e7).rolling(LIQUIDITY_WINDOW, min_periods=20).median()
+    )
 
     return out[TECHNICAL_COLUMNS]
 

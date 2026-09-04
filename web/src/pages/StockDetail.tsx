@@ -93,6 +93,16 @@ export function StockDetail({ rows }: { rows: ScreenerRow[] }) {
       <section className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <ScoreCard label="Quality" value={row.quality_score} hint="growth, returns, balance sheet, cash" />
         <ScoreCard label="Value" value={row.value_score} hint="multiples vs sector and own history" />
+        <ScoreCard
+          label="Revision"
+          value={row.revision_score}
+          hint="earnings surprise, growth accelerating"
+        />
+        <ScoreCard
+          label="Ownership"
+          value={row.ownership_score}
+          hint="promoter and institutional buying"
+        />
         <ScoreCard label="T-M momentum" value={row.tm_score} hint="trend, relative strength, volume" />
         <ScoreCard label="T-S support" value={row.ts_score} hint={row.reason ?? 'zone, confirmation, reward-to-risk'} />
       </section>

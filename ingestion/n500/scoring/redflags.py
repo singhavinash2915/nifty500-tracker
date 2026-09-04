@@ -46,6 +46,7 @@ PLEDGE_LIMIT = 20.0
 PROMOTER_DROP_LIMIT = 3.0          # percentage points over four quarters
 CFO_TO_PAT_FLOOR = 0.5             # three-year cash conversion
 DEBTOR_DAYS_JUMP = 1.4             # year on year
+TURNOVER_FLOOR_CR = 2.0            # median daily traded value, rupees crore
 
 
 def promoter_pledge(pledge_pct: float | None, *, checked: bool) -> Flag:
@@ -130,6 +131,31 @@ def receivable_bloat(debtor_days: list[float | None], *, is_financial: bool = Fa
     return Flag("receivable_bloat", Verdict.PASS, f"debtor days {values[1]:.0f}")
 
 
+def illiquid(turnover_cr: float | None) -> Flag:
+    """Median daily traded value below the floor.
+
+    Not a judgement about the business — a gate on whether the backtest is
+    telling the truth. Every result in this project is computed from closing
+    prices on the assumption that a position could be opened and closed at
+    something near them. On a stock trading two crore a day that assumption is
+    fine for a retail-sized position and false for anything larger; below it,
+    the exit is the problem, and a stock you cannot leave is not an investment
+    whatever it scores.
+
+    The floor is set for the portfolio this tracker is built for. Anyone
+    running materially more money should raise it, because the number that
+    matters is your own position against the day's volume, not the day's volume
+    on its own.
+    """
+    if turnover_cr is None:
+        return Flag("illiquid", Verdict.UNKNOWN, "no turnover history")
+    if turnover_cr < TURNOVER_FLOOR_CR:
+        return Flag(
+            "illiquid", Verdict.FAIL, f"trades {turnover_cr:.2f} cr/day (median, 60d)"
+        )
+    return Flag("illiquid", Verdict.PASS, f"{turnover_cr:.1f} cr/day")
+
+
 def loss_making(pat: list[float | None]) -> Flag:
     """Losses in two of the last three years."""
     values = [v for v in pat[-3:] if v is not None]
@@ -156,6 +182,15 @@ def evaluate(context: dict) -> list[Flag]:
         ),
         loss_making(context.get("pat", [])),
     ]
+
+
+def evaluate_market(context: dict) -> list[Flag]:
+    """Gates computed from price and volume rather than from filings.
+
+    Kept separate because they are evaluated in a different job on a different
+    cadence: filings change quarterly, turnover changes every day.
+    """
+    return [illiquid(context.get("turnover_60d_cr"))]
 
 
 def excluded(flags: list[Flag]) -> bool:

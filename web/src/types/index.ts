@@ -16,9 +16,13 @@ export interface ScreenerRow {
   close: number | null
   quality_score: number | null
   value_score: number | null
+  /** Earnings surprise and acceleration — what is changing, not what is. */
+  revision_score: number | null
+  /** Promoter and institutional accumulation over the last four quarters. */
+  ownership_score: number | null
   tm_score: number | null
   ts_score: number | null
-  /** max(T-M, T-S) blended with Q and V. */
+  /** max(T-M, T-S) blended with Q, V, R and O. */
   blended: number | null
   winning_setup: Setup
   setup_status: SetupStatus
@@ -51,6 +55,8 @@ export interface ScreenerRow {
     back_below: number
   } | null
   rejected_at_resistance: boolean
+  /** Median daily traded value over 60 sessions, in rupees crore. */
+  turnover_60d_cr: number | null
 }
 
 export interface ScreenerSnapshot {

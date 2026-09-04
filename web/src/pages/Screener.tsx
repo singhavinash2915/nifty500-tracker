@@ -7,7 +7,9 @@ import { funnel, isExcluded, pickTechnical, reblend, winningSetup } from '../lib
 import { pct } from '../lib/format'
 import { MarketStrip } from '../components/MarketStrip'
 
-type SortKey = 'blended' | 'quality_score' | 'value_score' | 'technical' | 'mom_12_1' | 'symbol'
+type SortKey =
+  | 'blended' | 'quality_score' | 'value_score' | 'revision_score'
+  | 'ownership_score' | 'technical' | 'mom_12_1' | 'symbol'
 type View = 'all' | 'support' | 'excluded'
 
 export function Screener({ rows }: { rows: ScreenerRow[] }) {
@@ -177,6 +179,8 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
             <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono text-xs text-slate-500">
               <span>Q {row.quality_score?.toFixed(0) ?? '—'}</span>
               <span>V {row.value_score?.toFixed(0) ?? '—'}</span>
+              <span>R {row.revision_score?.toFixed(0) ?? '—'}</span>
+              <span>O {row.ownership_score?.toFixed(0) ?? '—'}</span>
               <span>T {technical?.toFixed(0) ?? '—'}</span>
               <span className={
                 row.mom_12_1 !== null && row.mom_12_1 >= 0
@@ -203,6 +207,8 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
               <Th right onClick={() => toggleSort('blended')} active={sort === 'blended'}>Blend</Th>
               <Th right onClick={() => toggleSort('quality_score')} active={sort === 'quality_score'}>Q</Th>
               <Th right onClick={() => toggleSort('value_score')} active={sort === 'value_score'}>V</Th>
+              <Th right onClick={() => toggleSort('revision_score')} active={sort === 'revision_score'}>R</Th>
+              <Th right onClick={() => toggleSort('ownership_score')} active={sort === 'ownership_score'}>O</Th>
               <Th right onClick={() => toggleSort('technical')} active={sort === 'technical'}>Tech</Th>
               <th className="px-3 py-2">Setup</th>
               <Th right onClick={() => toggleSort('mom_12_1')} active={sort === 'mom_12_1'}>12-1 mom</Th>
@@ -232,6 +238,8 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
                 </td>
                 <Num value={row.quality_score} />
                 <Num value={row.value_score} />
+                <Num value={row.revision_score} />
+                <Num value={row.ownership_score} />
                 <Num value={technical} />
                 <td className="px-3 py-2 text-xs">
                   {setup === 'support' ? (

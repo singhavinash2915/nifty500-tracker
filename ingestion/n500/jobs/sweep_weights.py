@@ -25,7 +25,10 @@ from .run_backtest import load_histories
 JOB = "sweep_weights"
 PANEL_PATH = REPO_ROOT / "data" / "backtest" / "panel.csv"
 w = settings.blend_weights
-INCUMBENT = sweep.Candidate(w["quality"], w["value"], w["technical"])
+INCUMBENT = sweep.Candidate(
+    w["quality"], w["value"], w["technical"],
+    revision=w.get("revision", 0.0), ownership=w.get("ownership", 0.0),
+)
 
 
 def build_panel(db: Db, *, hold: int, limit: int | None) -> pd.DataFrame:
@@ -64,6 +67,15 @@ def build_panel(db: Db, *, hold: int, limit: int | None) -> pd.DataFrame:
                     "technical": row.get("technical"),
                     "setup": row.get("winning_setup"),
                     "forward_return": exit_price / entry - 1.0,
+                    # Every raw feature travels with the row so `feature_ic`
+                    # can put each on trial individually. Cheap to carry and
+                    # the only way to tell a pillar that works from one that is
+                    # riding on the pillar beside it.
+                    **{
+                        name: row.get(name)
+                        for name in sweep.FEATURES
+                        if name in row.index
+                    },
                 }
             )
         print(f"[{JOB}]   {as_of}: {len(rows)} rows so far", flush=True)
@@ -100,6 +112,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[{JOB}] panel is empty", file=sys.stderr)
         return 1
 
+    features = sweep.feature_ic(panel)
+    if not features.empty:
+        _report_features(features)
+        features.to_csv(args.panel.parent / "feature_ic.csv", index=False)
+
     results = sweep.search(panel, include=[INCUMBENT])
     if results.empty:
         print(f"[{JOB}] no candidate produced a usable decile table", file=sys.stderr)
@@ -110,6 +127,42 @@ def main(argv: list[str] | None = None) -> int:
     results.sort_values("median_rho", ascending=False).to_csv(out, index=False)
     print(f"\n[{JOB}] full surface -> {out}")
     return 0
+
+
+def _report_features(features: pd.DataFrame) -> None:
+    """Each feature alone, before any of them are combined."""
+    print(f"\n{'=' * 74}")
+    print("  EACH FEATURE ON ITS OWN — does this number predict anything?")
+    print(f"{'=' * 74}")
+    print("  IC is signed the way the theory says it should point, so a positive")
+    print("  number means the idea works as stated and a negative one means it")
+    print("  works backwards. A t below 2 means the sample cannot tell.\n")
+
+    print(f"  {'feature':<24} {'want':>4} {'IC':>7} {'t':>6} {'dates+':>7} {'n':>7}")
+    print(f"  {'-' * 60}")
+    for _, row in features.iterrows():
+        marker = "*" if abs(row["t"]) >= 2 else " "
+        positive = row.get("positive_dates")
+        share = f"{positive * 100:>6.0f}%" if pd.notna(positive) else "     —"
+        print(
+            f"{marker} {row['feature']:<24} {row['expected_sign']:>4} "
+            f"{row['ic']:>+7.3f} {row['t']:>+6.2f} {share} {int(row['n']):>7}"
+        )
+
+    significant = features[features["t"].abs() >= 2]
+    print()
+    if significant.empty:
+        print("  Nothing clears t = 2. On this sample no single feature is")
+        print("  demonstrably informative, which is a result about the sample as")
+        print("  much as about the features — fourteen overlapping six-month")
+        print("  windows in one market is not much to ask a question of.")
+    else:
+        for _, row in significant.iterrows():
+            direction = "as predicted" if row["ic"] > 0 else "BACKWARDS"
+            print(f"  {row['feature']}: IC {row['ic']:+.3f}, t {row['t']:+.2f} — {direction}.")
+
+    print("\n  'dates+' is the share of rebalances where the correlation had the")
+    print("  predicted sign. A feature at 50% is a coin flip whatever its mean IC.")
 
 
 def _report(panel: pd.DataFrame, results: pd.DataFrame) -> None:

@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from ..db import Db, run
-from ..scoring import quality, redflags, value
+from ..scoring import ownership, quality, redflags, revision, value
 
 JOB = "compute_fundamental_scores"
 
@@ -101,6 +101,27 @@ def assemble(
             "pe": market.get("pe"),
             "pat_cagr_3y": quality.cagr(pat_history, 3),
         }
+    )
+
+    metrics.update(
+        revision.build_metrics(
+            {
+                "quarterly_pat": _history(quarterly, "pat"),
+                "quarterly_revenue": _history(quarterly, "revenue"),
+                "quarterly_opm": opm_quarters,
+            }
+        )
+    )
+
+    metrics.update(
+        ownership.build_metrics(
+            {
+                "promoter_history": promoter_history,
+                "has_promoter": has_promoter,
+                "fii_history": _history(holding, "fii_pct"),
+                "dii_history": _history(holding, "dii_pct"),
+            }
+        )
     )
 
     metrics.update(
@@ -203,6 +224,10 @@ def main(argv: list[str] | None = None) -> int:
             "opm_trend", "debt_equity", "interest_cover", "debt_trend", "cfo_to_pat",
             "fcf_positive", "pe", "peg", "pb", "ev_ebitda", "ev_sales",
             "pe_5y_median", "dividend_yield",
+            "sue_pat", "sue_revenue", "accel_pat", "accel_revenue",
+            "margin_revision", "consistency",
+            "promoter_delta_4q", "promoter_delta_1q",
+            "fii_delta_4q", "fii_delta_2q", "dii_delta_4q",
         ]
         for column in numeric:
             # Values arrive from JSON as objects; an object column silently
@@ -212,6 +237,8 @@ def main(argv: list[str] | None = None) -> int:
 
         q = quality.score(table)
         v = value.score(table)
+        r = revision.score(table)
+        o = ownership.score(table)
 
         rows = []
         for symbol in table.index:
@@ -225,6 +252,8 @@ def main(argv: list[str] | None = None) -> int:
                     # score, it is off the list, and the reason travels with it.
                     "quality_score": None if excluded or pd.isna(q.loc[symbol]) else round(float(q.loc[symbol]), 2),
                     "value_score": None if excluded or pd.isna(v.loc[symbol]) else round(float(v.loc[symbol]), 2),
+                    "revision_score": None if excluded or pd.isna(r.loc[symbol]) else round(float(r.loc[symbol]), 2),
+                    "ownership_score": None if excluded or pd.isna(o.loc[symbol]) else round(float(o.loc[symbol]), 2),
                     "excluded": excluded,
                     "flags": redflags.summarise(flags),
                 }
@@ -233,9 +262,14 @@ def main(argv: list[str] | None = None) -> int:
         log.rows_written = db.upsert(
             "fundamental_scores", rows, on_conflict="symbol,date"
         )
-        n_excluded = sum(1 for r in rows if r["excluded"])
-        scored = sum(1 for r in rows if r["quality_score"] is not None)
-        log.notes = f"{scored} scored, {n_excluded} excluded by a red flag"
+        n_excluded = sum(1 for row in rows if row["excluded"])
+        scored = sum(1 for row in rows if row["quality_score"] is not None)
+        revised = sum(1 for row in rows if row["revision_score"] is not None)
+        owned = sum(1 for row in rows if row["ownership_score"] is not None)
+        log.notes = (
+            f"{scored} scored, {revised} with a revision score, "
+            f"{owned} with an ownership score, {n_excluded} excluded by a red flag"
+        )
         summary = log.notes
 
     mode = "dry run" if db.dry_run else "Supabase"

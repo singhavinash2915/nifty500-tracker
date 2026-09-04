@@ -2,14 +2,16 @@
 
     python -m n500.jobs.compute_scores --dry-run
 
-All four scores are live. The technical input to the blend is max(T-M, T-S),
-and the winning setup is recorded: a stock is never punished for being a good
-reversal candidate rather than a good breakout, because they are different
-setups and averaging them would make both invisible.
+Five pillars are live: quality, value, revision, ownership and the technical.
+The technical input to the blend is max(T-M, T-S), and the winning setup is
+recorded: a stock is never punished for being a good reversal candidate rather
+than a good breakout, because they are different setups and averaging them
+would make both invisible.
 
-Default blend weights are Q 45 / V 20 / technical 35 — quality decides *what*
-you are willing to own, the technical decides *when*. They are a starting
-suggestion only; the phase 6 backtest is what should set them, not intuition.
+The weights live in config and carry the reasoning behind them. Broadly:
+quality and value describe what the business *is*, revision and ownership
+describe what is *changing*, and the technical decides when. Only the first
+three have been through a sweep.
 
 A business excluded by a red flag gets no blended score at all. Not a low one:
 a stock whose reported profit never becomes cash does not belong on the list,
@@ -26,7 +28,7 @@ import pandas as pd
 
 from ..config import settings
 from ..db import Db, run
-from ..scoring import momentum
+from ..scoring import momentum, redflags
 from ..scoring.ranking import peer_groups
 
 JOB = "compute_scores"
@@ -100,6 +102,8 @@ def main(argv: list[str] | None = None) -> int:
     fundamentals = pd.DataFrame(db.select("fundamental_scores"))
     q = pd.Series(np.nan, index=snapshot.index, dtype="float64")
     v = pd.Series(np.nan, index=snapshot.index, dtype="float64")
+    rev = pd.Series(np.nan, index=snapshot.index, dtype="float64")
+    own = pd.Series(np.nan, index=snapshot.index, dtype="float64")
     excluded = pd.Series(False, index=snapshot.index, dtype="bool")
     flags_by: dict[str, list] = {}
     if not fundamentals.empty:
@@ -108,6 +112,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         q = pd.to_numeric(latest_f["quality_score"].reindex(snapshot.index), errors="coerce")
         v = pd.to_numeric(latest_f["value_score"].reindex(snapshot.index), errors="coerce")
+        # Guarded on presence: the columns arrive with migration 0015, and a
+        # database one migration behind should still produce a screener.
+        if "revision_score" in latest_f:
+            rev = pd.to_numeric(
+                latest_f["revision_score"].reindex(snapshot.index), errors="coerce"
+            )
+        if "ownership_score" in latest_f:
+            own = pd.to_numeric(
+                latest_f["ownership_score"].reindex(snapshot.index), errors="coerce"
+            )
         excluded = (
             latest_f["excluded"].reindex(snapshot.index).fillna(False).astype(bool)
         )
@@ -129,6 +143,26 @@ def main(argv: list[str] | None = None) -> int:
         )
         status = latest_setups["setup_status"].reindex(snapshot.index).fillna("none")
 
+    # The liquidity gate is evaluated here rather than in the fundamentals job
+    # because it is computed from price and volume, which change every day
+    # while a filing changes once a quarter. It excludes exactly as a red flag
+    # does: a stock you cannot get out of is off the list, not marked down.
+    turnover = (
+        pd.to_numeric(snapshot["turnover_60d_cr"], errors="coerce")
+        if "turnover_60d_cr" in snapshot
+        else pd.Series(np.nan, index=snapshot.index, dtype="float64")
+    )
+    market_flags: dict[str, list] = {}
+    for symbol in snapshot.index:
+        value_cr = turnover.loc[symbol]
+        flags = redflags.evaluate_market(
+            {"turnover_60d_cr": None if pd.isna(value_cr) else float(value_cr)}
+        )
+        market_flags[symbol] = flags
+        if redflags.excluded(flags):
+            excluded.loc[symbol] = True
+        flags_by[symbol] = list(flags_by.get(symbol, [])) + redflags.summarise(flags)
+
     with run(JOB, db=db) as log:
         tm = momentum.score(snapshot)
         groups = peer_groups(snapshot["sector"])
@@ -142,6 +176,8 @@ def main(argv: list[str] | None = None) -> int:
 
         pillars = {"quality": (q, WEIGHTS["quality"]),
                    "value": (v, WEIGHTS["value"]),
+                   "revision": (rev, WEIGHTS["revision"]),
+                   "ownership": (own, WEIGHTS["ownership"]),
                    "technical": (technical, WEIGHTS["technical"])}
         weighted = pd.Series(0.0, index=snapshot.index)
         available = pd.Series(0.0, index=snapshot.index)
@@ -174,6 +210,8 @@ def main(argv: list[str] | None = None) -> int:
                     "date": as_of.isoformat(),
                     "quality_score": None if pd.isna(q.loc[symbol]) else round(float(q.loc[symbol]), 2),
                     "value_score": None if pd.isna(v.loc[symbol]) else round(float(v.loc[symbol]), 2),
+                    "revision_score": None if pd.isna(rev.loc[symbol]) else round(float(rev.loc[symbol]), 2),
+                    "ownership_score": None if pd.isna(own.loc[symbol]) else round(float(own.loc[symbol]), 2),
                     "tm_score": None if pd.isna(tm.loc[symbol]) else round(float(tm.loc[symbol]), 2),
                     "ts_score": None if pd.isna(ts.loc[symbol]) else round(float(ts.loc[symbol]), 2),
                     "blended": None if pd.isna(value) else round(float(value), 2),
@@ -186,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
                     "rs_vs_index": _num(snapshot.at[symbol, "rs_vs_index"]),
                     "dist_52w_high": _num(snapshot.at[symbol, "dist_52w_high"]),
                     "rsi14": _num(snapshot.at[symbol, "rsi14"]),
+                    "turnover_60d_cr": _num(turnover.loc[symbol]),
                     "above_200dma": (
                         None if pd.isna(snapshot.at[symbol, "sma200"])
                         else bool(snapshot.at[symbol, "close"] > snapshot.at[symbol, "sma200"])
@@ -199,9 +238,11 @@ def main(argv: list[str] | None = None) -> int:
 
         log.rows_written = db.upsert("scores_daily", rows, on_conflict="symbol,date")
         support_wins = int((winner == "support").sum())
+        thin = sum(1 for f in market_flags.values() if redflags.excluded(f))
         log.notes = (
             f"{len(rows)} scored as of {as_of}; {support_wins} led by the "
-            f"support setup; {int(excluded.sum())} excluded by a red flag"
+            f"support setup; {int(excluded.sum())} excluded by a red flag "
+            f"({thin} of them for turnover)"
         )
         summary = log.notes
 

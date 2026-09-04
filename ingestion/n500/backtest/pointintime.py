@@ -34,10 +34,10 @@ import pandas as pd
 
 from .. import indicators as ind
 from .. import technicals as tech
-from ..scoring import momentum, quality, redflags, support, value
+from ..scoring import momentum, ownership, quality, redflags, revision, support, value
 from ..scoring.ranking import peer_groups
 from ..zones import reversal
-from ..zones.build import Zone, build_zones
+from ..zones.build import Zone, build_zones, live_zones_above, live_zones_below
 from ..zones.pivots import find_pivots
 
 # Bars of history required before a symbol can be scored at all: a 200-day
@@ -228,8 +228,16 @@ def score_cross_section(
         quarterly = filed_by(books.get("quarterly", pd.DataFrame()), as_of)
         holding = books.get("holding", pd.DataFrame())
         if not holding.empty and "quarter_end" in holding:
+            # Not `quarter_end <= as_of`. A quarter's shareholding is filed up
+            # to 21 days after it ends, so reading it on the last day of the
+            # quarter is a look-ahead of up to three weeks — small, but exactly
+            # the kind that makes an ownership signal look predictive when it
+            # is only early.
             quarter = pd.to_datetime(holding["quarter_end"], errors="coerce").dt.date
-            holding = holding[quarter.notna() & (quarter <= as_of)]
+            visible = quarter.notna() & quarter.map(
+                lambda q: ownership.disclosed_by(q) <= as_of if pd.notna(q) else False
+            )
+            holding = holding[visible]
 
         flags = redflags.evaluate(
             {
@@ -265,6 +273,23 @@ def score_cross_section(
             }
         )
 
+        revision_metrics = revision.build_metrics(
+            {
+                "quarterly_pat": quarterly["pat"].tolist() if "pat" in quarterly else [],
+                "quarterly_revenue": quarterly["revenue"].tolist() if "revenue" in quarterly else [],
+                "quarterly_opm": quarterly["opm"].tolist() if "opm" in quarterly else [],
+            }
+        )
+        ownership_metrics = ownership.build_metrics(
+            {
+                "promoter_history": holding["promoter_pct"].tolist() if "promoter_pct" in holding else [],
+                "has_promoter": bool(holding["has_promoter"].iloc[-1])
+                if len(holding) and "has_promoter" in holding else False,
+                "fii_history": holding["fii_pct"].tolist() if "fii_pct" in holding else [],
+                "dii_history": holding["dii_pct"].tolist() if "dii_pct" in holding else [],
+            }
+        )
+
         technical_row = (
             history.technicals.iloc[index].to_dict() if index < len(history.technicals) else {}
         )
@@ -281,8 +306,11 @@ def score_cross_section(
                 ),
                 "dividend_yield": np.nan,
                 **metrics,
+                **revision_metrics,
+                **ownership_metrics,
                 **valuation,
                 **{k: technical_row.get(k) for k in tech.TECHNICAL_COLUMNS},
+                **_overhead_at(history, index, price),
             }
         )
 
@@ -295,6 +323,8 @@ def score_cross_section(
 
     frame["quality_score"] = quality.score(frame)
     frame["value_score"] = value.score(frame)
+    frame["revision_score"] = revision.score(frame)
+    frame["ownership_score"] = ownership.score(frame)
     frame["tm_score"] = momentum.score(frame)
 
     # T-S, gated on the quality score computed a moment ago from filed data.
@@ -324,6 +354,55 @@ def score_cross_section(
     )
     frame.attrs["setups"] = setups
     return frame
+
+
+def _overhead_at(history: SymbolHistory, index: int, price: float) -> dict:
+    """What stands above the price, and how it has behaved there.
+
+    These are the features the resistance work added, exposed to the panel so
+    the sweep can measure whether any of them actually predicts. Three claims
+    are being put on trial:
+
+      * a strong overhead level should cap the six-month return, so
+        `resistance_strength` should predict negatively and `headroom` — the
+        room to it — positively;
+      * a failed breakout should predict negatively and hard, because the
+        buyers who chased the break become supply;
+      * `zone_respect` on the support below should predict positively, since a
+        level that has held every test is a better floor than one that has been
+        broken twice.
+
+    None of that is assumed anywhere in the scoring. It is recorded so it can be
+    checked.
+    """
+    zones = history.daily_zones
+    above = live_zones_above(zones, price, at_index=index)
+    below = live_zones_below(zones, price, at_index=index)
+
+    nearest = above[0] if above else None
+    floor_below = below[0] if below else None
+
+    breakout = (
+        reversal.false_breakout(history.daily, index, ceil=nearest.ceil, timeframe="daily")
+        if nearest else None
+    )
+
+    return {
+        "resistance_strength": nearest.strength if nearest else np.nan,
+        "resistance_respect": nearest.respect if nearest else np.nan,
+        # Fraction of the current price, so it is comparable across stocks.
+        "headroom": (nearest.floor / price - 1.0) if nearest else np.nan,
+        "false_breakout": 1.0 if breakout else 0.0,
+        "rejected_at_resistance": float(
+            reversal.rejected_at_resistance(
+                history.daily, index, floor=nearest.floor, ceil=nearest.ceil
+            )
+        ) if nearest else 0.0,
+        "zone_respect": (
+            floor_below.respect if floor_below and floor_below.respect is not None else np.nan
+        ),
+        "zone_strength": floor_below.strength if floor_below else np.nan,
+    }
 
 
 def _support_at(
@@ -371,13 +450,15 @@ def blend(frame: pd.DataFrame, weights: dict[str, float]) -> pd.Series:
     pillars = {
         "quality": frame["quality_score"],
         "value": frame["value_score"],
+        "revision": frame.get("revision_score"),
+        "ownership": frame.get("ownership_score"),
         "technical": frame["technical"],
     }
     weighted = pd.Series(0.0, index=frame.index)
     available = pd.Series(0.0, index=frame.index)
     for name, series in pillars.items():
         weight = weights.get(name, 0.0)
-        if weight <= 0:
+        if weight <= 0 or series is None:
             continue
         weighted += series.fillna(0.0) * weight
         available += series.notna().astype("float64") * weight

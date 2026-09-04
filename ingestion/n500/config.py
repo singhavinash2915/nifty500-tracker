@@ -31,7 +31,20 @@ load_dotenv(REPO_ROOT / ".env")
 #
 # Quality's *gates* are unaffected. A red flag still excludes outright; what
 # changed is how much the quality score is paid in the blend.
-DEFAULT_BLEND_WEIGHTS = {"quality": 25.0, "value": 35.0, "technical": 40.0}
+#
+# Revision and ownership enter at a deliberately modest weight. Neither has
+# been through the sweep yet — they are added because the theory behind them is
+# strong and the gap they fill is real, not because this sample has measured
+# them, and a pillar on theory alone does not get to outweigh one that has at
+# least been tested. Run `sweep_weights` once they have a history and let the
+# information coefficients set these properly.
+DEFAULT_BLEND_WEIGHTS = {
+    "quality": 15.0,
+    "value": 25.0,
+    "technical": 35.0,
+    "revision": 17.0,
+    "ownership": 8.0,
+}
 
 
 # The tracker's tables live in their own Postgres schema rather than `public`.
