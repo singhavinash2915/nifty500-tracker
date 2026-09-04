@@ -191,9 +191,25 @@ export function Portfolio() {
                               ? undefined
                               : `${pct(p.stop_distance_pct, 0)} away`
                         } />
-                  <Cell label="Still at risk"
-                        value={p.risk_remaining === null ? '—' : rupees(Math.max(p.risk_remaining, 0))}
-                        hint={p.risk_share === null ? undefined : `${(p.risk_share * 100).toFixed(1)}% of the book`} />
+                  {/* Capital, not give-back. The two diverge the moment the
+                      stop clears cost, and showing ₹6,636 beside "0.0%" read
+                      as a bug in one of them rather than the distinction it
+                      actually is. */}
+                  <Cell
+                    label="Capital at risk"
+                    value={
+                      p.risk_share === null
+                        ? '—'
+                        : rupees(p.risk_share * (settings?.total_capital ?? 0))
+                    }
+                    hint={
+                      p.risk_share === 0 && p.give_back_share
+                        ? `none — ${rupees(Math.max(p.risk_remaining ?? 0, 0))} of profit rides on the stop`
+                        : p.risk_share === null
+                          ? undefined
+                          : `${(p.risk_share * 100).toFixed(2)}% of capital`
+                    }
+                  />
                   <Cell label="Score" value={p.blended?.toFixed(0) ?? '—'}
                         hint={p.decile === null ? undefined : `decile ${p.decile}`} />
                 </dl>
