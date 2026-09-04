@@ -1,5 +1,11 @@
 import { supabase } from './supabase'
-import type { ScreenerRow, ScreenerSnapshot } from '../types'
+import type { Bars, PeriodRecord, ScreenerRow, ScreenerSnapshot, StockDetail, Zone } from '../types'
+
+// Two years of daily bars are shown, but the moving averages are computed over
+// a longer window so the 200DMA has a value on the very first visible bar
+// instead of 200 bars of nothing. Both fit inside PostgREST's 1,000-row cap.
+const VISIBLE_BARS = 520
+const FETCH_BARS = 760
 
 /**
  * Where the screener's rows come from.
@@ -86,4 +92,131 @@ function toScreenerRow(r: Record<string, any>): ScreenerRow {
     caps: [],
     reason: null,
   }
+}
+
+
+/**
+ * One stock's chart, zones and financials.
+ *
+ * Reads from Supabase, falling back to the exported JSON. Serving these from
+ * the database rather than 486 static files is what makes a static deploy
+ * viable at all: the files are 23MB of nightly-regenerated data that would
+ * otherwise have to be committed to git or rebuilt in CI, and they would go
+ * stale between deploys while the screener beside them stayed live.
+ */
+export async function loadDetail(symbol: string): Promise<StockDetail | null> {
+  if (supabase) {
+    try {
+      const [bars, zones, annual, quarterly, holding] = await Promise.all([
+        supabase
+          .from('prices_daily')
+          .select('date,open,high,low,close,adj_close,volume')
+          .eq('symbol', symbol)
+          .order('date', { ascending: false })
+          .limit(FETCH_BARS),
+        supabase.from('support_zones').select('*').eq('symbol', symbol),
+        supabase
+          .from('fundamentals_y')
+          .select('period_end,revenue,ebitda,pat,eps,cfo,roce,roe,debt_equity,debtor_days')
+          .eq('symbol', symbol)
+          .order('period_end'),
+        supabase
+          .from('fundamentals_q')
+          .select('period_end,revenue,pat,opm,eps')
+          .eq('symbol', symbol)
+          .order('period_end'),
+        supabase
+          .from('shareholding')
+          .select('quarter_end,promoter_pct,fii_pct,dii_pct,public_pct')
+          .eq('symbol', symbol)
+          .order('quarter_end'),
+      ])
+
+      if (bars.error) throw new Error(bars.error.message)
+      if (!bars.data?.length) throw new Error('no price history')
+
+      // Fetched newest-first so the limit takes the most recent window.
+      const rows = [...bars.data].reverse()
+      return {
+        symbol,
+        ...framesFrom(rows),
+        zones: (zones.data ?? []).map(toZone),
+        annual: (annual.data ?? []).map((r) => rename(r, 'period_end')),
+        quarterly: (quarterly.data ?? []).map((r) => rename(r, 'period_end')),
+        shareholding: (holding.data ?? []).map((r) => rename(r, 'quarter_end')),
+      }
+    } catch {
+      // fall through to the static snapshot
+    }
+  }
+
+  try {
+    const res = await fetch(`${import.meta.env.BASE_URL}stocks/${symbol}.json`)
+    return res.ok ? ((await res.json()) as StockDetail) : null
+  } catch {
+    return null
+  }
+}
+
+/** Split-adjusted OHLCV plus the two moving averages the chart draws. */
+function framesFrom(rows: Record<string, any>[]): {
+  bars: Bars
+  overlays: { sma50?: (number | null)[]; sma200?: (number | null)[] }
+} {
+  // adj_close / close is the cumulative corporate-action factor; applying it to
+  // the other legs keeps the candle consistent with the line.
+  const factor = rows.map((r) =>
+    r.close && r.adj_close ? Number(r.adj_close) / Number(r.close) : 1,
+  )
+  const adjusted = rows.map((r) => Number(r.adj_close))
+
+  const sma50 = movingAverage(adjusted, 50)
+  const sma200 = movingAverage(adjusted, 200)
+  const from = Math.max(rows.length - VISIBLE_BARS, 0)
+
+  return {
+    bars: {
+      t: rows.slice(from).map((r) => String(r.date)),
+      o: rows.slice(from).map((r, i) => num(r.open) * factor[from + i]),
+      h: rows.slice(from).map((r, i) => num(r.high) * factor[from + i]),
+      l: rows.slice(from).map((r, i) => num(r.low) * factor[from + i]),
+      c: adjusted.slice(from),
+      v: rows.slice(from).map((r) => num(r.volume)),
+    },
+    overlays: { sma50: sma50.slice(from), sma200: sma200.slice(from) },
+  }
+}
+
+function movingAverage(values: number[], window: number): (number | null)[] {
+  const out: (number | null)[] = []
+  let sum = 0
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i]
+    if (i >= window) sum -= values[i - window]
+    out.push(i >= window - 1 ? sum / window : null)
+  }
+  return out
+}
+
+const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v))
+
+function toZone(z: Record<string, any>): Zone {
+  return {
+    timeframe: z.timeframe,
+    source: z.source,
+    floor: Number(z.floor_price),
+    ceil: Number(z.ceil_price),
+    touches: Number(z.touch_count ?? 0),
+    strength: z.strength === null ? null : Number(z.strength),
+    formed_on: z.formed_on ?? null,
+    invalidated_on: z.invalidated_on ?? null,
+  }
+}
+
+/** The charts key every series off `period`, whatever the column was called. */
+function rename(row: Record<string, any>, dateColumn: string): PeriodRecord {
+  const { [dateColumn]: period, ...rest } = row
+  const out: PeriodRecord = { period: String(period) }
+  for (const [k, v] of Object.entries(rest)) out[k] = v === null ? null : Number(v)
+  return out
 }

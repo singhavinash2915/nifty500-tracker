@@ -1,0 +1,76 @@
+# Build the tracker and publish it to GitHub Pages.
+#
+# Only the app shell is deployed. Every figure it shows — screener rows, price
+# history, zones, financials — is read from Supabase at runtime by a signed-in
+# user, so the site does not go stale between deploys and the 23MB of exported
+# detail files never need to enter git.
+#
+# The anon key is baked into the bundle, which is expected for Supabase and is
+# safe only because RLS requires an authenticated role for every table. If those
+# policies are ever loosened back to `using (true)`, this deployment becomes a
+# public read-write door to the database.
+
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it half-published.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+        working-directory: web
+
+      - run: npm run build
+        working-directory: web
+        env:
+          # A project site is served from /<repo>/, so assets need that prefix.
+          VITE_BASE: /${{ github.event.repository.name }}/
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_SUPABASE_SCHEMA: n500
+
+      - name: Fail if the build has no Supabase config
+        working-directory: web
+        run: |
+          if ! grep -q "supabase.co" dist/assets/*.js; then
+            echo "The bundle carries no Supabase URL — the repository secrets are"
+            echo "missing, and the deployed site would show a sign-in page that"
+            echo "cannot work. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY."
+            exit 1
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

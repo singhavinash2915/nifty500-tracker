@@ -5,6 +5,7 @@ import type { ScreenerRow, StockDetail as Detail } from '../types'
 import { PriceChart } from '../components/PriceChart'
 import { ShareholdingTrend, TrendBars } from '../components/Charts'
 import { crore, num, pct } from '../lib/format'
+import { loadDetail } from '../lib/load'
 import { useDarkMode } from '../lib/palette'
 
 const CONFIRMATION_LABELS: Record<string, string> = {
@@ -35,10 +36,11 @@ export function StockDetail({ rows }: { rows: ScreenerRow[] }) {
     let cancelled = false
     setDetail(null)
     setError(null)
-    fetch(`${import.meta.env.BASE_URL}stocks/${symbol}.json`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${r.status}`))))
-      .then((d: Detail) => !cancelled && setDetail(d))
-      .catch(() => !cancelled && setError('No detail data published for this symbol yet.'))
+    loadDetail(symbol).then((d) => {
+      if (cancelled) return
+      if (d) setDetail(d)
+      else setError('No detail data published for this symbol yet.')
+    })
     return () => {
       cancelled = true
     }

@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react'
 import { HashRouter, Link, Route, Routes } from 'react-router-dom'
 import { TriangleAlert } from 'lucide-react'
 import type { ScreenerRow } from './types'
+import { useAuth } from './lib/auth'
 import { loadScreener } from './lib/load'
+import { SignIn } from './pages/SignIn'
+import { supabase } from './lib/supabase'
 import { Portfolio } from './pages/Portfolio'
 import { Screener } from './pages/Screener'
 import { StockDetail } from './pages/StockDetail'
@@ -13,8 +16,14 @@ export default function App() {
   const [source, setSource] = useState<'supabase' | 'snapshot'>('snapshot')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const { session, loading: authLoading, signOut } = useAuth()
+
+  // Nothing is readable without a session, so there is no point fetching until
+  // there is one.
+  const gated = Boolean(supabase) && !session
 
   useEffect(() => {
+    if (gated || authLoading) return
     let cancelled = false
     loadScreener().then(({ snapshot, source, error }) => {
       if (cancelled) return
@@ -27,7 +36,14 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [gated, authLoading])
+
+  if (authLoading) {
+    return <p className="p-10 text-sm text-slate-500">Checking your session…</p>
+  }
+  if (gated) {
+    return <SignIn />
+  }
 
   return (
     // Hash routing so deep links survive GitHub Pages, which has no rewrite rule.
@@ -47,6 +63,14 @@ export default function App() {
             >
               Positions &amp; alerts
             </Link>
+            {session && (
+              <button
+                onClick={signOut}
+                className="ml-auto text-sm text-slate-500 underline underline-offset-4 hover:text-slate-900 dark:hover:text-slate-100"
+              >
+                Sign out
+              </button>
+            )}
           </div>
           <p className="mt-2 max-w-2xl text-slate-600 dark:text-slate-400">
             Four scores. <strong>Q</strong> and <strong>V</strong> judge the business;{' '}
