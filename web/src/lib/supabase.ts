@@ -16,5 +16,17 @@ const schema = (import.meta.env.VITE_SUPABASE_SCHEMA as string | undefined) ?? '
 // generics pin the schema to "public", which a client on another schema does
 // not satisfy.
 export const supabase = isConfigured
-  ? createClient(url!, anonKey!, { db: { schema } })
+  ? createClient(url!, anonKey!, {
+      db: { schema },
+      auth: {
+        // Signing in is meant to be a one-off per device. The access token
+        // lasts an hour, but the refresh token rotates with no fixed expiry
+        // and no inactivity timeout, so a persisted session renews itself
+        // indefinitely. Stated explicitly rather than left to defaults,
+        // because "do I have to log in again?" is the whole question.
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    })
   : null
