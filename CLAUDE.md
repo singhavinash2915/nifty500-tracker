@@ -47,6 +47,32 @@ web/                   React 19 + Vite + Tailwind v4 (note: v4, unlike the SCC a
 data/dryrun/           gitignored job output when Supabase is unconfigured
 ```
 
+## Deployment
+
+Live at **https://singhavinash2915.github.io/nifty500-tracker/**, rebuilt by
+`.github/workflows/pages.yml` on every push to main. Only the app shell is
+deployed; every figure is read from Supabase at runtime, so the site never goes
+stale between deploys and the 23MB of exported detail files stay out of git.
+
+The anon key is inlined into the public bundle. That is expected for Supabase
+and safe only because RLS does real work — verified by pulling the key out of
+the deployed JavaScript and getting 401 on every table.
+
+Access is scoped to the addresses in `n500.owners`, not merely to "signed in".
+The project is shared with another application and has open signups, so
+`to authenticated using (true)` would have let anyone who registered read
+everything. Disabling signups would have fixed it project-wide and broken the
+other application, so the check is `n500.is_owner()` instead. To add or change
+who can see it:
+
+```sql
+insert into n500.owners (email) values ('someone@example.com');
+```
+
+Magic-link redirects must be listed in the project's `uri_allow_list`
+(Management API or Dashboard → Authentication → URL Configuration). `site_url`
+belongs to the other application — add to the allow list, never replace it.
+
 ## Supabase
 
 The tracker shares the **vitalsync** project rather than having its own, and
