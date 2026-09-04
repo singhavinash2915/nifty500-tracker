@@ -178,7 +178,7 @@ export function StockDetail({ rows }: { rows: ScreenerRow[] }) {
       {overhead && (
         <section className={`mb-6 rounded-md border p-4 ${
           overhead.false_breakout
-            ? 'border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40'
+            ? 'border-emerald-300 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40'
             : 'border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900'
         }`}>
           <h2 className="font-mono text-[11px] uppercase tracking-wider text-slate-500">
@@ -190,6 +190,8 @@ export function StockDetail({ rows }: { rows: ScreenerRow[] }) {
               value={overhead.floor ? `${num(overhead.floor)}–${num(overhead.ceil)}` : '—'}
             />
             <Field label="Strength" value={overhead.strength?.toFixed(0) ?? '—'} />
+            {/* Less room has measured better, not worse — the same finding as
+                the failed breakout, and from the same direction. */}
             <Field
               label="Room to it"
               value={
@@ -205,14 +207,20 @@ export function StockDetail({ rows }: { rows: ScreenerRow[] }) {
           </dl>
 
           {overhead.false_breakout && (
-            <p className="mt-3 text-sm text-amber-900 dark:text-amber-200">
+            <p className="mt-3 text-sm text-emerald-900 dark:text-emerald-200">
               <strong>Failed breakout.</strong> Closed above this level on{' '}
               <span className="font-mono">{overhead.false_breakout.broke_on}</span>, held{' '}
               {overhead.false_breakout.bars_held}{' '}
               {overhead.false_breakout.bars_held === 1 ? 'session' : 'sessions'}, peaked at{' '}
               <span className="font-mono">{num(overhead.false_breakout.peak)}</span> and is
-              back under it. Buyers who chased the break are now offside, and that supply
-              sits between here and any further upside.
+              back under it.{' '}
+              <span className="text-emerald-800 dark:text-emerald-300">
+                This panel used to call that a warning. Measured over 37 rebalances it is
+                the opposite: stocks showing it beat the rest of the index over the
+                following six months, by a wide and unusually stable margin. Reaching a
+                tested level takes real demand, and the pullback is where that demand gets
+                a better price.
+              </span>
             </p>
           )}
         </section>

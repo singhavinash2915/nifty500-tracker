@@ -133,12 +133,22 @@ FEATURES: dict[str, int] = {
     "promoter_delta_4q": +1,
     "fii_delta_4q": +1,
     "dii_delta_4q": +1,
-    # The resistance work. A strong level overhead should cap the move; room to
-    # it should help; a failed breakout should hurt.
-    "resistance_strength": -1,
-    "headroom": +1,
-    "false_breakout": -1,
-    "rejected_at_resistance": -1,
+    # The resistance work, signed the way it measured rather than the way it was
+    # theorised. The original hypothesis was that a strong level overhead caps
+    # the move, that room to run helps, and that a failed breakout hurts. All
+    # four came back the other way across 37 rebalances, stable in both halves
+    # and surviving a control for momentum, so the signs are flipped and the
+    # expectation now matches the evidence. Anything that reads negative here is
+    # a feature that has *changed* behaviour, which is the thing worth noticing.
+    "resistance_strength": +1,
+    "headroom": -1,
+    "false_breakout": +1,
+    "rejected_at_resistance": +1,
+    # Carried so the next panel can answer the obvious objection: are the four
+    # above just proximity to the 52-week high in disguise? Controlling for the
+    # momentum composite was not a sharp enough test, since that blends nine
+    # inputs and this is one of them.
+    "dist_52w_high": -1,
     "zone_respect": +1,
     "zone_strength": +1,
     # Not a signal — a check that the liquidity gate is not quietly a size bet.
