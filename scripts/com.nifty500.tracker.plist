@@ -15,6 +15,13 @@
   published shortly after; running well past that leaves room for a late file
   without needing a retry loop. RunAtLoad is deliberately false — loading the
   agent should not kick off a full sweep in the middle of the day.
+
+  The repository lives in ~/Developer rather than ~/Documents on purpose.
+  ~/Documents is a TCC-protected folder, and a launchd agent has no Full Disk
+  Access, so it cannot even exec a script stored there: the job died instantly
+  with status 126 and "Operation not permitted" from /bin/bash. The alternative
+  is granting Full Disk Access to /bin/bash, which hands it to every shell
+  script on the machine to schedule one job.
 -->
 <plist version="1.0">
 <dict>
@@ -23,7 +30,7 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/avinashsingh/Documents/nifty500-tracker/scripts/nightly.sh</string>
+    <string>/Users/avinashsingh/Developer/nifty500-tracker/scripts/nightly.sh</string>
   </array>
 
   <key>StartCalendarInterval</key>
@@ -36,11 +43,11 @@
   <false/>
 
   <key>StandardOutPath</key>
-  <string>/Users/avinashsingh/Documents/nifty500-tracker/data/logs/launchd.out.log</string>
+  <string>/Users/avinashsingh/Developer/nifty500-tracker/data/logs/launchd.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/avinashsingh/Documents/nifty500-tracker/data/logs/launchd.err.log</string>
+  <string>/Users/avinashsingh/Developer/nifty500-tracker/data/logs/launchd.err.log</string>
 
   <key>WorkingDirectory</key>
-  <string>/Users/avinashsingh/Documents/nifty500-tracker</string>
+  <string>/Users/avinashsingh/Developer/nifty500-tracker</string>
 </dict>
 </plist>
