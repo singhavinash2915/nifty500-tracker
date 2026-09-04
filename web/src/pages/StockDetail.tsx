@@ -5,7 +5,7 @@ import type { ScreenerRow, StockDetail as Detail } from '../types'
 import { PriceChart } from '../components/PriceChart'
 import { ShareholdingTrend, TrendBars } from '../components/Charts'
 import { crore, num, pct } from '../lib/format'
-import { loadDetail, loadOverhead, type Overhead } from '../lib/load'
+import { loadDetail, loadSetup, type Overhead, type Setup } from '../lib/load'
 import { useDarkMode } from '../lib/palette'
 
 const CONFIRMATION_LABELS: Record<string, string> = {
@@ -29,6 +29,7 @@ export function StockDetail({ rows }: { rows: ScreenerRow[] }) {
   const [detail, setDetail] = useState<Detail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [overhead, setOverhead] = useState<Overhead | null>(null)
+  const [setup, setSetup] = useState<Setup | null>(null)
   const dark = useDarkMode()
 
   const row = rows.find((r) => r.symbol === symbol)
@@ -42,7 +43,13 @@ export function StockDetail({ rows }: { rows: ScreenerRow[] }) {
       if (d) setDetail(d)
       else setError('No detail data published for this symbol yet.')
     })
-    loadOverhead(symbol).then((o) => !cancelled && setOverhead(o))
+    setSetup(null)
+    setOverhead(null)
+    loadSetup(symbol).then((r) => {
+      if (cancelled) return
+      setSetup(r.setup)
+      setOverhead(r.overhead)
+    })
     return () => {
       cancelled = true
     }
@@ -114,24 +121,42 @@ export function StockDetail({ rows }: { rows: ScreenerRow[] }) {
         </section>
       )}
 
-      {row.setup_status !== 'none' && (
+      {(setup || row.setup_status !== 'none') && (
         <section className="mb-6 rounded-md border border-sky-200 bg-sky-50 p-4 dark:border-sky-900 dark:bg-sky-950/40">
           <h2 className="font-mono text-[11px] uppercase tracking-wider text-sky-800 dark:text-sky-300">
-            Support setup &middot; {row.setup_status}
+            Support setup &middot; {setup?.status ?? row.setup_status}
+            {setup?.zone_timeframe ? ` · ${setup.zone_timeframe}` : ''}
           </h2>
           <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
-            <Field label="Zone" value={row.zone_floor && row.zone_ceil ? `${num(row.zone_floor)}–${num(row.zone_ceil)}` : '—'} />
-            <Field label="Stop" value={num(row.stop_price)} />
-            <Field label="Target" value={row.target_price ? `${num(row.target_price)} (${pct(row.headroom, 0)})` : '—'} />
-            <Field label="Reward : risk" value={row.reward_risk ? `${row.reward_risk.toFixed(1)}:1` : '—'} />
+            <Field
+              label="Zone"
+              value={
+                setup?.zone_floor && setup?.zone_ceil
+                  ? `${num(setup.zone_floor)}–${num(setup.zone_ceil)}`
+                  : '—'
+              }
+            />
+            <Field label="Stop" value={setup?.stop_price ? num(setup.stop_price) : '—'} />
+            <Field
+              label="Target"
+              value={
+                setup?.target_price
+                  ? `${num(setup.target_price)} (${pct(setup.headroom, 0)})`
+                  : '—'
+              }
+            />
+            <Field
+              label="Reward : risk"
+              value={setup?.reward_risk ? `${setup.reward_risk.toFixed(1)}:1` : '—'}
+            />
           </dl>
           <div className="mt-3 flex flex-wrap gap-2 text-xs">
-            {row.confirmations.map((c) => (
+            {(setup?.confirmations ?? row.confirmations).map((c) => (
               <span key={c} className="rounded bg-emerald-100 px-2 py-0.5 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
                 {CONFIRMATION_LABELS[c] ?? c}
               </span>
             ))}
-            {row.caps.map((c) => (
+            {(setup?.caps ?? row.caps).map((c) => (
               <span key={c} className="rounded bg-amber-100 px-2 py-0.5 text-amber-900 dark:bg-amber-950/60 dark:text-amber-300">
                 {c}
               </span>

@@ -403,23 +403,74 @@ export interface Overhead {
   rejected: boolean
 }
 
-export async function loadOverhead(symbol: string): Promise<Overhead | null> {
-  if (!supabase) return null
+/** The support side of the same row: the zone, the plan, and what confirmed it. */
+export interface Setup {
+  status: string
+  zone_floor: number | null
+  zone_ceil: number | null
+  zone_timeframe: string | null
+  stop_price: number | null
+  target_price: number | null
+  reward_risk: number | null
+  headroom: number | null
+  confirmations: string[]
+  caps: string[]
+}
+
+/**
+ * The whole latest `ts_setups` row for one symbol, split into its two halves.
+ *
+ * `scores_daily` carries only the handful of setup columns the screener sorts
+ * on, so a detail page built from the screener row showed a triggered setup
+ * with an empty zone, stop and target — the plan missing from the panel whose
+ * entire job is to state the plan. Everything the panel needs lives on
+ * `ts_setups`, so read it directly rather than widening the screener payload
+ * by ten columns for the one page in five hundred that displays them.
+ */
+export async function loadSetup(
+  symbol: string,
+): Promise<{ setup: Setup | null; overhead: Overhead | null }> {
+  if (!supabase) return { setup: null, overhead: null }
   const { data, error } = await supabase
     .from('ts_setups')
-    .select('resistance_floor,resistance_ceil,resistance_strength,false_breakout,rejected_at_resistance')
+    .select('*')
     .eq('symbol', symbol)
     .order('date', { ascending: false })
     .limit(1)
-  if (error || !data?.length) return null
+  if (error || !data?.length) return { setup: null, overhead: null }
 
   const r = data[0] as Record<string, any>
-  if (r.resistance_floor === null) return null
-  return {
-    floor: Number(r.resistance_floor),
-    ceil: r.resistance_ceil === null ? null : Number(r.resistance_ceil),
-    strength: r.resistance_strength === null ? null : Number(r.resistance_strength),
-    false_breakout: r.false_breakout ?? null,
-    rejected: Boolean(r.rejected_at_resistance),
-  }
+  const n = (v: unknown) => (v === null || v === undefined ? null : Number(v))
+
+  const confirmation = (r.confirmation ?? {}) as Record<string, boolean>
+  const setup: Setup | null =
+    r.setup_status && r.setup_status !== 'none'
+      ? {
+          status: String(r.setup_status),
+          zone_floor: n(r.zone_floor),
+          zone_ceil: n(r.zone_ceil),
+          zone_timeframe: r.zone_timeframe ?? null,
+          stop_price: n(r.stop_price),
+          target_price: n(r.target_price),
+          reward_risk: n(r.reward_risk),
+          headroom: n(r.headroom),
+          confirmations: Object.entries(confirmation)
+            .filter(([, on]) => on)
+            .map(([name]) => name),
+          caps: (r.caps ?? []) as string[],
+        }
+      : null
+
+  const overhead: Overhead | null =
+    r.resistance_floor === null || r.resistance_floor === undefined
+      ? null
+      : {
+          floor: n(r.resistance_floor),
+          ceil: n(r.resistance_ceil),
+          strength: n(r.resistance_strength),
+          false_breakout: r.false_breakout ?? null,
+          rejected: Boolean(r.rejected_at_resistance),
+        }
+
+  return { setup, overhead }
 }
