@@ -38,6 +38,29 @@ ARCHIVE_URL = (
     "BhavCopy_NSE_CM_0_0_0_{yyyymmdd}_F_0000.csv.zip"
 )
 
+# NSE replaced the bhavcopy with the UDiFF layout partway through; the new URL
+# 404s for anything before this date and the old one is still served for
+# anything after it, so the cut is a hard switch rather than a fallback.
+UDIFF_FROM = date(2024, 1, 1)
+
+LEGACY_URL = (
+    "https://nsearchives.nseindia.com/content/historical/EQUITIES/"
+    "{year}/{month}/cm{day}{month}{year}bhav.csv.zip"
+)
+
+# The old file names the columns differently and says less. What it does not
+# have that UDiFF does: FinInstrmTp, so index and stock derivatives cannot be
+# excluded by type — they are not in the cash file at all, so SERIES alone is
+# enough. And its PREVCLOSE is the raw previous close, *not* adjusted for a
+# corporate action: TATASTEEL's 1:10 split on 28 July 2022 opened at 98.1
+# against a PREVCLOSE of 959.4. That would matter if the adjustment read that
+# column, but `_action_ratio` measures the gap on the open against the previous
+# close, so both layouts feed it the same two numbers.
+LEGACY_COLUMNS = {
+    "SYMBOL", "SERIES", "OPEN", "HIGH", "LOW", "CLOSE",
+    "PREVCLOSE", "TOTTRDQTY", "TIMESTAMP", "ISIN",
+}
+
 CACHE_DIR = DATA_DIR / "cache" / "bhavcopy"
 
 REQUIRED_COLUMNS = {
@@ -65,6 +88,12 @@ ACTION_RISE_ABOVE = 1.28
 # ex-date price also moves on its own merits, so this cannot be tiny; 2.01%
 # was the worst error across the 56 real actions in two years of history.
 SNAP_TOLERANCE = 0.03
+
+# Inside this band the observed gap is close enough to a candidate that the
+# match is evidence by itself, and the nearest one is taken. Outside it, the
+# day's own move swamps the difference between candidates and simplicity
+# decides instead. See `_snap`.
+EXACT_TOLERANCE = 0.005
 
 # Only adjacent sessions are comparable. Across a suspension or a symbol
 # change the two closes are unrelated and any ratio between them is noise.
@@ -101,6 +130,18 @@ def make_client() -> httpx.Client:
         },
         timeout=settings.request_timeout,
         follow_redirects=True,
+    )
+
+
+def _is_legacy(on: date) -> bool:
+    return on < UDIFF_FROM
+
+
+def _archive_url(on: date) -> str:
+    if not _is_legacy(on):
+        return ARCHIVE_URL.format(yyyymmdd=f"{on:%Y%m%d}")
+    return LEGACY_URL.format(
+        year=f"{on:%Y}", month=f"{on:%b}".upper(), day=f"{on:%d}"
     )
 
 
@@ -154,7 +195,7 @@ def fetch_raw(client: httpx.Client, on: date, *, use_cache: bool = True) -> str:
     if use_cache and _miss_is_settled(on):
         raise BhavcopyUnavailable(f"no bhavcopy for {on} (cached miss)")
 
-    response = client.get(ARCHIVE_URL.format(yyyymmdd=f"{on:%Y%m%d}"))
+    response = client.get(_archive_url(on))
     if response.status_code == 404:
         _miss_path(on).parent.mkdir(parents=True, exist_ok=True)
         _miss_path(on).touch()
@@ -176,7 +217,15 @@ def fetch_raw(client: httpx.Client, on: date, *, use_cache: bool = True) -> str:
 
 
 def parse(text: str, *, on: date | None = None) -> dict[str, Quote]:
-    """Parse to {symbol: Quote}, keeping only cash-segment equity series."""
+    """Parse to {symbol: Quote}, keeping only cash-segment equity series.
+
+    Dispatches on the layout rather than the date, so a cached file parses the
+    same way whenever it is read back.
+    """
+    header = {c.strip() for c in (text.splitlines() or [""])[0].split(",")}
+    if "TckrSymb" not in header and LEGACY_COLUMNS <= header:
+        return _parse_legacy(text, on=on)
+
     reader = csv.DictReader(io.StringIO(text))
     columns = {c.strip() for c in (reader.fieldnames or [])}
     missing = REQUIRED_COLUMNS - columns
@@ -227,6 +276,50 @@ def parse(text: str, *, on: date | None = None) -> dict[str, Quote]:
     return quotes
 
 
+def _parse_legacy(text: str, *, on: date | None = None) -> dict[str, Quote]:
+    """The pre-2024 layout, mapped onto the same Quote."""
+    quotes: dict[str, Quote] = {}
+    for row in csv.DictReader(io.StringIO(text)):
+        if (row.get("SERIES") or "").strip() not in EQUITY_SERIES:
+            continue
+        symbol = row["SYMBOL"].strip().upper()
+        try:
+            quote = Quote(
+                symbol=symbol,
+                # "02-JAN-2023" — the only field that needs real work.
+                date=datetime.strptime(row["TIMESTAMP"].strip(), "%d-%b-%Y").date(),
+                open=float(row["OPEN"]),
+                high=float(row["HIGH"]),
+                low=float(row["LOW"]),
+                close=float(row["CLOSE"]),
+                prev_close=float(row["PREVCLOSE"]),
+                volume=int(float(row["TOTTRDQTY"] or 0)),
+                isin=(row.get("ISIN") or "").strip(),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise BhavcopyError(f"{symbol}: unparsable legacy row ({exc})") from exc
+
+        if not (quote.low <= quote.close <= quote.high):
+            raise BhavcopyError(
+                f"{symbol} on {quote.date}: close {quote.close} outside "
+                f"low/high {quote.low}/{quote.high}"
+            )
+        quotes[symbol] = quote
+
+    if len(quotes) < MIN_EXPECTED_EQUITIES:
+        raise BhavcopyError(
+            f"only {len(quotes)} equities parsed from the legacy layout, "
+            f"expected at least {MIN_EXPECTED_EQUITIES}"
+        )
+
+    if on is not None:
+        stamped = next(iter(quotes.values())).date
+        if stamped != on:
+            raise BhavcopyError(f"asked for {on} but the file is stamped {stamped}")
+
+    return quotes
+
+
 def fetch(client: httpx.Client, on: date, *, use_cache: bool = True) -> dict[str, Quote]:
     return parse(fetch_raw(client, on, use_cache=use_cache), on=on)
 
@@ -264,10 +357,48 @@ def _plausible_ratios() -> list[float]:
 RATIOS = _plausible_ratios()
 
 
+def _complexity(ratio: float) -> int:
+    """How baroque a corporate action has to be to produce this factor.
+
+    A plain 1:10 split is the simplest thing that can halve-and-then-some; the
+    compound ratios exist for genuine cases like BAJFINANCE's split-plus-bonus,
+    but they should never win against a plain one that also fits.
+    """
+    from fractions import Fraction
+
+    frac = Fraction(ratio).limit_denominator(1000)
+    return frac.numerator + frac.denominator
+
+
 def _snap(observed: float) -> float | None:
-    """Nearest simple corporate-action ratio, or None if nothing fits."""
-    best = min(RATIOS, key=lambda candidate: abs(observed / candidate - 1.0))
-    return best if abs(observed / best - 1.0) <= SNAP_TOLERANCE else None
+    """The corporate-action ratio behind an observed gap, or None if none fits.
+
+    Nearest-wins is wrong here, and TATASTEEL's 1:10 split shows why. It opened
+    at 98.10 against a previous close of 959.40 — an observed factor of 0.10225.
+    The true 0.1 is 2.3% away, but 7/68 (a 1:4 split compounded with a 10:7
+    bonus) is 0.7% away and won on nearness alone, restating history at 98.76
+    instead of 95.94: a 2.9% error running back through every earlier bar.
+
+    The reason nearness misleads is that the observed factor is not the ratio.
+    It is the ratio times whatever the stock genuinely did on the open, which is
+    routinely a percent or two. So a match at 2% and a match at 0.7% are not
+    meaningfully different evidence, and among candidates that crowded the rarer
+    fraction wins by coincidence about as often as the real one.
+
+    Hence two stages. A match inside `EXACT_TOLERANCE` is strong evidence in its
+    own right — the stock opened almost exactly where the action implies — so
+    the nearest of those wins. Only when nothing is that close does the wider
+    band open up, and there the simplest fraction wins: a 1:10 split is a common
+    event and a 1:4-with-10:7-bonus is not.
+    """
+    exact = [r for r in RATIOS if abs(observed / r - 1.0) <= EXACT_TOLERANCE]
+    if exact:
+        return min(exact, key=lambda r: abs(observed / r - 1.0))
+
+    fitting = [r for r in RATIOS if abs(observed / r - 1.0) <= SNAP_TOLERANCE]
+    if not fitting:
+        return None
+    return min(fitting, key=lambda r: (_complexity(r), abs(observed / r - 1.0)))
 
 
 def _action_ratio(previous: Quote, current: Quote) -> float | None:

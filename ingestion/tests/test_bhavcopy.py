@@ -250,3 +250,79 @@ def test_no_marker_means_no_cached_miss(tmp_path, monkeypatch):
 
     monkeypatch.setattr(bhavcopy, "CACHE_DIR", tmp_path)
     assert not bhavcopy._miss_is_settled(d(2026, 9, 3))
+
+
+class TestSnapPrefersTheSimplestFit:
+    """Nearest is the wrong test when the candidate set is crowded.
+
+    But only outside the exact band — a candidate the stock opened almost
+    exactly on is evidence in its own right, and simplicity must not override
+    it. Both halves are pinned here against real observed factors.
+    """
+
+    def test_an_almost_exact_match_wins_even_when_it_is_baroque(self):
+        # SBC opened at a factor of 0.72702. 8/11 is 0.03% away and 5/7 is
+        # simpler but 1.8% away; simplicity-first picked 5/7 and was wrong.
+        assert bhavcopy._snap(0.72702) == pytest.approx(8 / 11)
+
+    def test_an_exact_common_ratio_is_not_replaced_by_a_simpler_one(self):
+        # KPIGREEN opened at exactly 0.7. 5/7 is a simpler fraction; taking it
+        # would be a regression.
+        assert bhavcopy._snap(0.7) == pytest.approx(0.7)
+
+    def test_a_clean_split_beats_a_closer_compound_ratio(self):
+        # TATASTEEL's 1:10 on 28 July 2022: opened 98.10 against a previous
+        # close of 959.40. 7/68 (a 1:4 split with a 10:7 bonus) is nearer, and
+        # picking it restated history 2.9% too high.
+        assert bhavcopy._snap(98.1 / 959.4) == pytest.approx(0.1)
+
+    def test_an_exact_ratio_still_snaps_to_itself(self):
+        for ratio in (0.5, 0.2, 0.1, 0.25):
+            assert bhavcopy._snap(ratio) == pytest.approx(ratio)
+
+    def test_noise_around_a_half_snaps_to_a_half(self):
+        assert bhavcopy._snap(0.5023) == pytest.approx(0.5)
+        assert bhavcopy._snap(0.4930) == pytest.approx(0.5)
+
+    def test_a_gap_between_plausible_ratios_returns_none(self):
+        # The candidate set is dense, so genuine gaps are narrow — 0.9395 sits
+        # between 14/15 and 15/16 and matches neither within tolerance. Only
+        # 101 of 2,850 sampled factors fail to match at all, which is the
+        # crowding that makes preferring the simplest fit necessary rather than
+        # merely tidy.
+        assert bhavcopy._snap(0.9395) is None
+
+
+class TestLegacyLayout:
+    """The pre-2024 bhavcopy, which names its columns differently."""
+
+    HEADER = (
+        "SYMBOL,SERIES,OPEN,HIGH,LOW,CLOSE,LAST,PREVCLOSE,"
+        "TOTTRDQTY,TOTTRDVAL,TIMESTAMP,TOTALTRADES,ISIN,\n"
+    )
+
+    def rows(self, n: int = 1300) -> str:
+        body = "".join(
+            f"SYM{i},EQ,100,105,99,104,104,98,1000,100000,"
+            f"02-JAN-2023,50,INE{i:09d},\n"
+            for i in range(n)
+        )
+        return self.HEADER + body
+
+    def test_it_is_detected_from_the_header_not_the_date(self):
+        quotes = bhavcopy.parse(self.rows())
+        assert len(quotes) == 1300
+        assert quotes["SYM0"].date == date(2023, 1, 2)
+        assert quotes["SYM0"].close == pytest.approx(104.0)
+
+    def test_the_day_month_year_timestamp_is_parsed(self):
+        quotes = bhavcopy.parse(self.rows(), on=date(2023, 1, 2))
+        assert quotes["SYM7"].date == date(2023, 1, 2)
+
+    def test_a_thin_file_is_rejected(self):
+        with pytest.raises(bhavcopy.BhavcopyError, match="legacy layout"):
+            bhavcopy.parse(self.rows(10))
+
+    def test_the_url_switches_at_the_udiff_cut(self):
+        assert "historical" in bhavcopy._archive_url(date(2023, 12, 29))
+        assert "BhavCopy_NSE_CM" in bhavcopy._archive_url(date(2024, 1, 1))
