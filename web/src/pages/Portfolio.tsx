@@ -7,6 +7,9 @@ import { loadAlerts, loadPortfolio, loadScreener,
          type PortfolioSettings, type PositionView } from '../lib/load'
 import { AddHolding } from '../components/AddHolding'
 
+const rupees = (v: number | null | undefined) =>
+  `₹${Math.round(v ?? 0).toLocaleString('en-IN')}`
+
 const SEVERITY_STYLE: Record<Severity, { chip: string; icon: React.ReactNode; label: string }> = {
   critical: {
     chip: 'bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300',
@@ -130,16 +133,16 @@ export function Portfolio() {
       {positions.length > 0 && (
         <>
           <div className="mb-4 grid gap-3 sm:grid-cols-4">
-            <Tile label="Invested" value={`₹${(totals.invested ?? 0).toLocaleString('en-IN')}`} />
+            <Tile label="Invested" value={rupees(totals.invested)} />
             <Tile
               label="Value"
-              value={`₹${(totals.value ?? 0).toLocaleString('en-IN')}`}
+              value={rupees(totals.value)}
               hint={pct(totals.return_pct ?? null)}
               tone={(totals.pnl ?? 0) >= 0 ? 'good' : 'bad'}
             />
             <Tile
               label="Capital at risk"
-              value={`₹${Math.round(totals.capital_at_risk ?? 0).toLocaleString('en-IN')}`}
+              value={rupees(totals.capital_at_risk)}
               hint={
                 settings
                   ? `${((totals.capital_at_risk ?? 0) / settings.total_capital * 100).toFixed(2)}% of ₹${(settings.total_capital / 100000).toFixed(1)}L`
@@ -176,7 +179,7 @@ export function Portfolio() {
                 <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-5">
                   <Cell label="Close" value={p.close?.toFixed(2) ?? '—'}
                         hint={p.weight === null ? undefined : `${(p.weight * 100).toFixed(0)}% weight`} />
-                  <Cell label="P&L" value={p.pnl === null ? '—' : `₹${p.pnl.toLocaleString('en-IN', {maximumFractionDigits: 0})}`} />
+                  <Cell label="P&L" value={p.pnl === null ? '—' : rupees(p.pnl)} />
                   <Cell label="Stop"
                         value={(p.stop_price ?? p.plan_stop)?.toFixed(2) ?? '—'}
                         hint={
@@ -187,7 +190,7 @@ export function Portfolio() {
                               : `${pct(p.stop_distance_pct, 0)} away`
                         } />
                   <Cell label="Still at risk"
-                        value={p.risk_remaining === null ? '—' : `₹${Math.round(Math.max(p.risk_remaining, 0)).toLocaleString('en-IN')}`}
+                        value={p.risk_remaining === null ? '—' : rupees(Math.max(p.risk_remaining, 0))}
                         hint={p.risk_share === null ? undefined : `${(p.risk_share * 100).toFixed(1)}% of the book`} />
                   <Cell label="Score" value={p.blended?.toFixed(0) ?? '—'}
                         hint={p.decile === null ? undefined : `decile ${p.decile}`} />
