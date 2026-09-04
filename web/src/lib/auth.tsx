@@ -5,18 +5,32 @@ import { supabase } from './supabase'
 /**
  * Sign-in state.
  *
- * A magic link rather than a password: there is one account, the link is one
- * click, and nothing has to store or transmit a password. It also keeps the
- * failure modes small — no reset flow, no strength rules, no leaked reuse.
+ * A password, not a magic link. The link flow was abandoned for good reasons:
+ * Supabase's built-in mailer allows two emails an hour, which is a wall rather
+ * than a limit when a link opens in the wrong browser; and a link tapped from a
+ * mail app opens inside *that app's* embedded browser, which keeps its own
+ * storage, so the session lands somewhere the real browser cannot see. A
+ * password has neither failure mode — it signs in whatever browser is already
+ * in front of you, as many times as you like.
  *
- * Every table now requires an authenticated role, so this is not decoration.
- * Without a session the app can read nothing at all.
+ * Only the holdings are behind it. The screener, the charts and every score
+ * stay open to anyone with the link, which is what they were always meant to
+ * be. And the withholding happens in the database, not here: see migration
+ * 0016. A gate in this file would stop someone who clicks a link and nobody
+ * else, because the anon key is compiled into the bundle and can be read out
+ * of it.
+ *
+ * The account's email is configuration rather than a field to fill in — there
+ * is exactly one owner, and typing an address every time to prove you are the
+ * only person who could be is friction with no security in it.
  */
+export const OWNER_EMAIL =
+  (import.meta.env.VITE_OWNER_EMAIL as string | undefined) ?? ''
+
 interface AuthState {
   session: Session | null
   loading: boolean
-  signIn: (email: string) => Promise<{ error: string | null }>
-  verifyCode: (email: string, code: string) => Promise<{ error: string | null }>
+  signIn: (password: string) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
 }
 
@@ -24,7 +38,6 @@ const Ctx = createContext<AuthState>({
   session: null,
   loading: true,
   signIn: async () => ({ error: 'auth is not configured' }),
-  verifyCode: async () => ({ error: 'auth is not configured' }),
   signOut: async () => {},
 })
 
@@ -51,35 +64,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const value: AuthState = {
     session,
     loading,
-    async signIn(email: string) {
+    async signIn(password: string) {
       if (!supabase) return { error: 'auth is not configured' }
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          // Hash routing means the redirect must land on the app root; the
-          // router takes over from there.
-          emailRedirectTo: window.location.origin + import.meta.env.BASE_URL,
-        },
+      if (!OWNER_EMAIL) {
+        return { error: 'VITE_OWNER_EMAIL is not set for this build' }
+      }
+      const { error } = await supabase.auth.signInWithPassword({
+        email: OWNER_EMAIL,
+        password,
       })
-      return { error: error?.message ?? null }
-    },
-    /**
-     * Sign in with the six-digit code instead of the link.
-     *
-     * Tapping a link from an email or chat app opens it inside *that app's*
-     * embedded browser, which keeps its own storage — so the session lands
-     * somewhere Safari cannot see and the real browser still shows a sign-in
-     * screen. A code you type is immune: it signs in whatever browser you are
-     * already looking at.
-     */
-    async verifyCode(email: string, code: string) {
-      if (!supabase) return { error: 'auth is not configured' }
-      const { error } = await supabase.auth.verifyOtp({
-        email,
-        token: code.trim(),
-        type: 'email',
-      })
-      return { error: error?.message ?? null }
+      // Supabase answers a wrong password with "Invalid login credentials",
+      // which reads as though the account might not exist. There is only one
+      // account, so say the thing that is actually true.
+      if (error) {
+        return {
+          error: /invalid login credentials/i.test(error.message)
+            ? 'Wrong password.'
+            : error.message,
+        }
+      }
+      return { error: null }
     },
     async signOut() {
       await supabase?.auth.signOut()

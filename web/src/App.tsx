@@ -6,6 +6,7 @@ import { useAuth } from './lib/auth'
 import { loadScreener } from './lib/load'
 import { Portfolio } from './pages/Portfolio'
 import { Screener } from './pages/Screener'
+import { SignIn } from './pages/SignIn'
 import { StockDetail } from './pages/StockDetail'
 
 export default function App() {
@@ -14,15 +15,7 @@ export default function App() {
   const [source, setSource] = useState<'supabase' | 'snapshot'>('snapshot')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const { session, signOut } = useAuth()
-
-  // No sign-in required: the database is open to the anon key. The auth
-  // provider stays wired up so restoring the gate is one flag, but nothing is
-  // withheld while it is off.
-  const gated = false
-  const authLoading = false
-  void gated
-  void authLoading
+  const { session, signOut, loading: authLoading } = useAuth()
 
   useEffect(() => {
     let cancelled = false
@@ -102,7 +95,22 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Screener rows={rows} />} />
             <Route path="/stock/:symbol" element={<StockDetail rows={rows} />} />
-            <Route path="/portfolio" element={<Portfolio />} />
+            {/* The only gated route. Everything else — every score, chart
+                and zone — stays open to anyone with the link; the holdings do
+                not. The real withholding is migration 0016's grants, so this
+                is the courtesy of a password box rather than the lock itself. */}
+            <Route
+              path="/portfolio"
+              element={
+                authLoading ? (
+                  <p className="text-sm text-slate-500">Checking…</p>
+                ) : session ? (
+                  <Portfolio />
+                ) : (
+                  <SignIn />
+                )
+              }
+            />
           </Routes>
         )}
       </div>

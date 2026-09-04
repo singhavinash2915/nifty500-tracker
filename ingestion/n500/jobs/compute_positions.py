@@ -14,12 +14,18 @@ import sys
 
 import pandas as pd
 
-from ..config import REPO_ROOT
+from ..config import DATA_DIR
 from ..db import Db, run
 from ..serialise import write
 
 JOB = "compute_positions"
-OUT = REPO_ROOT / "web" / "public" / "positions.json"
+
+# Deliberately not under web/public. Anything in that directory is copied into
+# the build and served by GitHub Pages to anyone with the URL, so writing the
+# marked holdings there published exactly what migration 0016 had just finished
+# withholding at the database. The browser reads positions live from Supabase
+# behind a sign-in; this file is for looking at locally and nothing else.
+OUT = DATA_DIR / "positions.json"
 
 
 def mark_to_market(position: dict, close: float | None, score: dict | None) -> dict:

@@ -13,3 +13,8 @@ data/cache/
 /data/backtest/
 /data/logs/
 supabase/.temp/
+
+# Generated from the holdings. Never under web/public — that directory is
+# served publicly, and these two files describe what is owned and at what price.
+data/positions.json
+data/alerts.json

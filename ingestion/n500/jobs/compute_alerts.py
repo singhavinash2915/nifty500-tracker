@@ -18,7 +18,7 @@ import pandas as pd
 
 from ..alerts import rules
 from ..alerts.rules import Alert
-from ..config import REPO_ROOT
+from ..config import DATA_DIR
 from ..db import Db, run
 from ..serialise import write
 
@@ -27,7 +27,10 @@ JOB = "compute_alerts"
 # How far back to look for an already-reported instance of the same event.
 DEDUPE_WINDOW_DAYS = 10
 
-OUT = REPO_ROOT / "web" / "public" / "alerts.json"
+# Not under web/public: an alert is generated *from* the holdings, so
+# "crossed below your stop today" names both the stock and the fact that it is
+# owned. Served statically it would leak the portfolio one line at a time.
+OUT = DATA_DIR / "alerts.json"
 
 
 def _record(frame: pd.DataFrame, symbol: str) -> dict | None:

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { AlertTriangle, CircleAlert, Info } from 'lucide-react'
 import type { AlertRow, Severity } from '../types'
 import { pct } from '../lib/format'
-import { loadPortfolio, loadScreener, type PositionView } from '../lib/load'
+import { loadAlerts, loadPortfolio, loadScreener, type PositionView } from '../lib/load'
 import { AddHolding } from '../components/AddHolding'
 
 const SEVERITY_STYLE: Record<Severity, { chip: string; icon: React.ReactNode; label: string }> = {
@@ -33,10 +33,7 @@ export function Portfolio() {
   useEffect(() => {
     let cancelled = false
     loadPortfolio().then(({ positions }) => !cancelled && setPositions(positions))
-    fetch(`${import.meta.env.BASE_URL}alerts.json`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((d) => !cancelled && setAlerts(Array.isArray(d) ? d : []))
-      .catch(() => !cancelled && setAlerts([]))
+    loadAlerts().then((rows) => !cancelled && setAlerts(rows))
     return () => {
       cancelled = true
     }

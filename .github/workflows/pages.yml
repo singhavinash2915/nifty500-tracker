@@ -50,6 +50,11 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_SUPABASE_SCHEMA: n500
+          # The one account the positions page signs in as. Not a
+          # secret — it is an identifier, and the password is what
+          # actually gates anything — but it lives in secrets so the
+          # address is not sitting in a public repo for scrapers.
+          VITE_OWNER_EMAIL: ${{ secrets.VITE_OWNER_EMAIL }}
 
       - name: Fail if the build has no Supabase config
         working-directory: web

@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { Bars, PeriodRecord, ScreenerRow, ScreenerSnapshot, StockDetail, Zone } from '../types'
+import type { AlertRow, Bars, PeriodRecord, ScreenerRow, ScreenerSnapshot, StockDetail, Zone } from '../types'
 
 // Two years of daily bars are shown, but the moving averages are computed over
 // a longer window so the 200DMA has a value on the very first visible bar
@@ -235,9 +235,11 @@ function rename(row: Record<string, any>, dateColumn: string): PeriodRecord {
 /**
  * Open holdings, marked to market and joined to what the screener thinks now.
  *
- * Read live rather than from the nightly export, because a holding added in the
- * browser has to appear immediately — waiting until 19:15 to see something you
- * just typed reads as a bug however well documented.
+ * Live only. There used to be a fallback to a `positions.json` served beside
+ * the app, which was a hole rather than a convenience: everything under
+ * web/public is published to GitHub Pages, so the fallback handed out exactly
+ * what the database was withholding. Signed out, this returns nothing — which
+ * is the correct answer, not a degraded one.
  */
 export async function loadPortfolio(): Promise<{
   positions: PositionView[]
@@ -280,14 +282,29 @@ export async function loadPortfolio(): Promise<{
       )
       return { positions: withRiskShares(marked), source: 'supabase' }
     } catch {
-      // fall through
+      // A signed-out read is a 401 from PostgREST, not an exception worth
+      // showing: the page asks for a password instead.
     }
   }
 
-  const res = await fetch(`${import.meta.env.BASE_URL}positions.json`).catch(() => null)
-  if (!res?.ok) return { positions: [], source: 'snapshot' }
-  const file = await res.json()
-  return { positions: file.positions ?? [], source: 'snapshot' }
+  return { positions: [], source: 'supabase' }
+}
+
+/**
+ * Tonight's alerts. Private for the same reason the positions are — an alert
+ * is generated from the holdings, so "crossed below your stop" names both the
+ * stock and the fact that it is owned.
+ */
+export async function loadAlerts(): Promise<AlertRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('alerts')
+    .select('*')
+    .order('date', { ascending: false })
+    .limit(50)
+  if (error || !data) return []
+  const latest = data[0]?.date
+  return data.filter((a) => a.date === latest) as AlertRow[]
 }
 
 export interface PositionView {
