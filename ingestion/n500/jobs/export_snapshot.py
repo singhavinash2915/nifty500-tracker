@@ -99,6 +99,8 @@ def build(db: Db) -> dict:
                 "close": _num(last_close.get(symbol)),
                 "quality_score": _num(score.get("quality_score")),
                 "value_score": _num(score.get("value_score")),
+                "revision_score": _num(score.get("revision_score")),
+                "ownership_score": _num(score.get("ownership_score")),
                 "tm_score": _num(score.get("tm_score")),
                 "ts_score": _num(score.get("ts_score")),
                 "blended": _num(score.get("blended")),
@@ -112,6 +114,7 @@ def build(db: Db) -> dict:
                 "rs_vs_index": _num(tech.get("rs_vs_index")) if tech is not None else None,
                 "dist_52w_high": _num(tech.get("dist_52w_high")) if tech is not None else None,
                 "rsi14": _num(tech.get("rsi14")) if tech is not None else None,
+                "turnover_60d_cr": _num(tech.get("turnover_60d_cr")) if tech is not None else None,
                 "above_200dma": (
                     None
                     if tech is None or pd.isna(pd.to_numeric(tech.get("sma200"), errors="coerce"))
@@ -127,6 +130,13 @@ def build(db: Db) -> dict:
                 "confirmations": [k for k, v in confirmation.items() if v is True],
                 "caps": (setup.get("caps") if setup is not None else None) or [],
                 "reason": _clean(setup.get("reason")) if setup is not None else None,
+                "resistance_floor": _num(setup.get("resistance_floor")) if setup is not None else None,
+                "resistance_ceil": _num(setup.get("resistance_ceil")) if setup is not None else None,
+                "resistance_strength": _num(setup.get("resistance_strength")) if setup is not None else None,
+                "false_breakout": (setup.get("false_breakout") if setup is not None else None) or None,
+                "rejected_at_resistance": bool(
+                    setup.get("rejected_at_resistance") if setup is not None else False
+                ),
             }
         )
 

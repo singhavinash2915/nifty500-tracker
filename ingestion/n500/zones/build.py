@@ -96,29 +96,57 @@ class Zone:
     def width(self) -> float:
         return self.ceil - self.floor
 
-    @property
-    def touches(self) -> list[ZoneEvent]:
-        return [e for e in self.events if e.kind in ("touch", "rejection")]
+    def _upto(self, at_index: int | None) -> list[ZoneEvent]:
+        return self.events if at_index is None else [
+            e for e in self.events if e.index <= at_index
+        ]
 
-    @property
-    def rejections(self) -> list[ZoneEvent]:
-        return [e for e in self.events if e.kind == "rejection"]
+    def touches_by(self, at_index: int | None = None) -> list[ZoneEvent]:
+        return [e for e in self._upto(at_index) if e.kind in ("touch", "rejection")]
 
-    @property
-    def breaks(self) -> list[ZoneEvent]:
-        return [e for e in self.events if e.kind == "break"]
+    def rejections_by(self, at_index: int | None = None) -> list[ZoneEvent]:
+        return [e for e in self._upto(at_index) if e.kind == "rejection"]
 
-    @property
-    def respect(self) -> float | None:
-        """Rejections as a share of every decisive test.
+    def breaks_by(self, at_index: int | None = None) -> list[ZoneEvent]:
+        return [e for e in self._upto(at_index) if e.kind == "break"]
+
+    def respect_at(self, at_index: int | None = None) -> float | None:
+        """Rejections as a share of every decisive test, as of one bar.
 
         Borrowed from the TradingView script's bounces/(bounces+breaks): a
         level tested five times and held five times is a different proposition
         from one tested five times and broken twice, even though both show
         five touches. Counting only touches flatters the second.
+
+        `at_index` is not optional in spirit. A zone's event list runs to the
+        end of the frame it was built from, so the whole-life ratio answers
+        "was this level ever broken, including later" — which in a backtest is
+        the answer rather than a signal. Measured that way it scored an
+        information coefficient of +0.19 at t = +17 with the predicted sign on
+        every single rebalance, a result no honest price feature produces.
+        Pass the bar being scored; leave it None only where the last bar in the
+        frame *is* now.
         """
-        decisive = len(self.rejections) + len(self.breaks)
-        return len(self.rejections) / decisive if decisive else None
+        rejections = len(self.rejections_by(at_index))
+        decisive = rejections + len(self.breaks_by(at_index))
+        return rejections / decisive if decisive else None
+
+    @property
+    def touches(self) -> list[ZoneEvent]:
+        return self.touches_by(None)
+
+    @property
+    def rejections(self) -> list[ZoneEvent]:
+        return self.rejections_by(None)
+
+    @property
+    def breaks(self) -> list[ZoneEvent]:
+        return self.breaks_by(None)
+
+    @property
+    def respect(self) -> float | None:
+        """The whole-life ratio. Correct only when the frame ends today."""
+        return self.respect_at(None)
 
     def is_resistance(self) -> bool:
         return self.kind is ZoneKind.RESISTANCE
@@ -404,8 +432,8 @@ def _annotate_resistance(
 
 def rate_strength(zone: Zone, *, at_index: int, timeframe: str) -> float:
     """0-100, from what the zone has done rather than how it was drawn."""
-    touches = [e for e in zone.touches if e.index <= at_index]
-    rejections = [e for e in zone.rejections if e.index <= at_index]
+    touches = zone.touches_by(at_index)
+    rejections = zone.rejections_by(at_index)
 
     # Touch count: peaks at 3-4. One touch is a guess; many touches mean the
     # level is being worn away and is closer to breaking than holding.
@@ -428,7 +456,7 @@ def rate_strength(zone: Zone, *, at_index: int, timeframe: str) -> float:
 
     # How often a decisive test went the level's way. A zone broken twice out
     # of five tests is weaker than the touch count alone suggests.
-    respect = zone.respect
+    respect = zone.respect_at(at_index)
     respect_score = 50.0 if respect is None else respect * 100.0
 
     volumes = [e.volume_ratio for e in touches if e.volume_ratio is not None]

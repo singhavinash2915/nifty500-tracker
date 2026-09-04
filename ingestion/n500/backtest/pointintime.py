@@ -26,7 +26,7 @@ buried, and it shrinks as the weekly membership table accumulates.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 
 import numpy as np
@@ -37,7 +37,13 @@ from .. import technicals as tech
 from ..scoring import momentum, ownership, quality, redflags, revision, support, value
 from ..scoring.ranking import peer_groups
 from ..zones import reversal
-from ..zones.build import Zone, build_zones, live_zones_above, live_zones_below
+from ..zones.build import (
+    Zone,
+    build_zones,
+    live_zones_above,
+    live_zones_below,
+    rate_strength,
+)
 from ..zones.pivots import find_pivots
 
 # Bars of history required before a symbol can be scored at all: a 200-day
@@ -356,6 +362,25 @@ def score_cross_section(
     return frame
 
 
+def _or_nan(value: float | None) -> float:
+    return np.nan if value is None else float(value)
+
+
+def _rated_at(zones: list[Zone], index: int, *, timeframe: str) -> list[Zone]:
+    """The live zones, with `strength` recomputed as of this bar.
+
+    Zones are built once over the whole frame, so `zone.strength` is what the
+    level looks like at the end of history. Handing that to the support scorer
+    at a 2025 rebalance leaks 2026 into the score. Replacing it on a copy keeps
+    the built zones reusable across every date.
+    """
+    out: list[Zone] = []
+    for zone in zones:
+        rated = replace(zone, strength=rate_strength(zone, at_index=index, timeframe=timeframe))
+        out.append(rated)
+    return out
+
+
 def _overhead_at(history: SymbolHistory, index: int, price: float) -> dict:
     """What stands above the price, and how it has behaved there.
 
@@ -388,8 +413,14 @@ def _overhead_at(history: SymbolHistory, index: int, price: float) -> dict:
     )
 
     return {
-        "resistance_strength": nearest.strength if nearest else np.nan,
-        "resistance_respect": nearest.respect if nearest else np.nan,
+        # Rated at this bar, not at the end of the frame. `zone.strength` was
+        # computed once over the whole history when the zones were built, so
+        # reading it here would tell a January rebalance how the level behaved
+        # in June.
+        "resistance_strength": (
+            rate_strength(nearest, at_index=index, timeframe="daily") if nearest else np.nan
+        ),
+        "resistance_respect": nearest.respect_at(index) if nearest else np.nan,
         # Fraction of the current price, so it is comparable across stocks.
         "headroom": (nearest.floor / price - 1.0) if nearest else np.nan,
         "false_breakout": 1.0 if breakout else 0.0,
@@ -398,10 +429,11 @@ def _overhead_at(history: SymbolHistory, index: int, price: float) -> dict:
                 history.daily, index, floor=nearest.floor, ceil=nearest.ceil
             )
         ) if nearest else 0.0,
-        "zone_respect": (
-            floor_below.respect if floor_below and floor_below.respect is not None else np.nan
+        "zone_respect": _or_nan(floor_below.respect_at(index) if floor_below else None),
+        "zone_strength": (
+            rate_strength(floor_below, at_index=index, timeframe="daily")
+            if floor_below else np.nan
         ),
-        "zone_strength": floor_below.strength if floor_below else np.nan,
     }
 
 
@@ -410,10 +442,20 @@ def _support_at(
 ) -> support.SupportSetup:
     price = float(history.daily["close"].iloc[index])
 
-    # Only zones that had formed and had not yet broken by this bar.
-    daily_live = [z for z in history.daily_zones if z.is_live(index)]
-    weekly_index = history.weekly.index.searchsorted(history.daily.index[index], side="right") - 1
-    weekly_live = [z for z in history.weekly_zones if z.is_live(int(weekly_index))]
+    # Only zones that had formed and had not yet broken by this bar, each
+    # re-rated as of it — `zone.strength` as built describes the end of the
+    # frame, which at a rebalance in the middle of one is the future.
+    daily_live = _rated_at(
+        [z for z in history.daily_zones if z.is_live(index)], index, timeframe="daily"
+    )
+    weekly_index = int(
+        history.weekly.index.searchsorted(history.daily.index[index], side="right") - 1
+    )
+    weekly_live = _rated_at(
+        [z for z in history.weekly_zones if z.is_live(weekly_index)],
+        weekly_index,
+        timeframe="weekly",
+    )
 
     nearest = min(
         (z for z in daily_live if z.floor <= price),

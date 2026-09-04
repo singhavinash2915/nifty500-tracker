@@ -10,6 +10,7 @@ from n500.scoring import support
 from n500.zones import reversal
 from n500.zones.build import (
     Zone,
+    ZoneEvent,
     ZoneSource,
     build_zones,
     cluster_supports,
@@ -391,3 +392,56 @@ def test_a_zone_stays_narrow_enough_to_place_a_stop_against():
         if zone.source is ZoneSource.VOLUME_SHELF:
             continue
         assert zone.width / last < 0.10, f"{zone.floor}-{zone.ceil} spans too much of price"
+
+
+class TestZoneStatisticsAreAsOfABar:
+    """A zone's event list runs to the end of the frame it was built from.
+
+    Every statistic derived from it therefore has to be asked for as of a bar,
+    or a backtest reads the future. This is not hypothetical: measured on the
+    whole life, zone respect scored an information coefficient of +0.19 at
+    t = +17 with the predicted sign on all fourteen rebalances — the signature
+    of a feature that already knows the answer.
+    """
+
+    def zone(self) -> Zone:
+        z = Zone(
+            timeframe="daily",
+            source=ZoneSource.PIVOT,
+            floor=100.0,
+            ceil=104.0,
+            formed_index=0,
+            formed_date=pd.Timestamp("2024-01-01"),
+        )
+        z.events = [
+            ZoneEvent(10, pd.Timestamp("2024-01-11"), "rejection"),
+            ZoneEvent(20, pd.Timestamp("2024-01-21"), "rejection"),
+            # The break happens later. Anything scored before bar 50 must not
+            # be able to see it.
+            ZoneEvent(50, pd.Timestamp("2024-02-20"), "break"),
+        ]
+        return z
+
+    def test_respect_before_the_break_does_not_know_about_it(self):
+        z = self.zone()
+        assert z.respect_at(30) == pytest.approx(1.0)
+
+    def test_respect_after_the_break_counts_it(self):
+        z = self.zone()
+        assert z.respect_at(60) == pytest.approx(2 / 3)
+
+    def test_the_whole_life_property_is_the_after_view(self):
+        # Kept for the live path, where the last bar in the frame is today.
+        assert self.zone().respect == pytest.approx(2 / 3)
+
+    def test_strength_before_the_break_is_higher_than_after(self):
+        z = self.zone()
+        before = rate_strength(z, at_index=30, timeframe="daily")
+        after = rate_strength(z, at_index=60, timeframe="daily")
+        assert before > after
+
+    def test_touch_and_break_counts_are_gated_too(self):
+        z = self.zone()
+        assert len(z.breaks_by(30)) == 0
+        assert len(z.breaks_by(60)) == 1
+        assert len(z.touches_by(15)) == 1
