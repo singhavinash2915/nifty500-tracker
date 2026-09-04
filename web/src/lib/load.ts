@@ -241,8 +241,14 @@ function rename(row: Record<string, any>, dateColumn: string): PeriodRecord {
  * what the database was withholding. Signed out, this returns nothing — which
  * is the correct answer, not a degraded one.
  */
+export interface PortfolioSettings {
+  total_capital: number
+  risk_pct: number
+}
+
 export async function loadPortfolio(): Promise<{
   positions: PositionView[]
+  settings: PortfolioSettings | null
   source: 'supabase' | 'snapshot'
 }> {
   if (supabase) {
@@ -255,7 +261,7 @@ export async function loadPortfolio(): Promise<{
       if (error) throw new Error(error.message)
 
       const rows = data ?? []
-      if (!rows.length) return { positions: [], source: 'supabase' }
+      if (!rows.length) return { positions: [], settings: null, source: 'supabase' }
 
       const symbols = [...new Set(rows.map((r) => r.symbol as string))]
       const [scores, prices, setups] = await Promise.all([
@@ -280,14 +286,26 @@ export async function loadPortfolio(): Promise<{
         mark(p, Number(close.get(p.symbol)?.adj_close ?? NaN),
              score.get(p.symbol), setup.get(p.symbol)),
       )
-      return { positions: withRiskShares(marked), source: 'supabase' }
+      const { data: settingsRow } = await supabase
+        .from('portfolio').select('total_capital,risk_pct').limit(1).maybeSingle()
+      const settings: PortfolioSettings | null = settingsRow
+        ? {
+            total_capital: Number(settingsRow.total_capital),
+            risk_pct: Number(settingsRow.risk_pct),
+          }
+        : null
+      return {
+        positions: withRiskShares(marked, settings),
+        settings,
+        source: 'supabase',
+      }
     } catch {
       // A signed-out read is a 401 from PostgREST, not an exception worth
       // showing: the page asks for a password instead.
     }
   }
 
-  return { positions: [], source: 'supabase' }
+  return { positions: [], settings: null, source: 'supabase' }
 }
 
 /**
@@ -339,8 +357,11 @@ export interface PositionView {
   move_stop_to: number | null
   days_held: number | null
   sector: string | null
-  /** Rupees at risk here as a share of the whole book's market value. */
+  /** Capital at risk here as a share of total capital. Zero once the stop is
+   *  above cost, because what is left to lose is profit rather than capital. */
   risk_share: number | null
+  /** Everything between here and the stop, profit included. */
+  give_back_share: number | null
   /** This position's market value as a share of the book. */
   weight: number | null
   /** Short sentences describing what needs attention, most urgent first. */
@@ -392,6 +413,7 @@ function mark(p: any, close: number, score: any, setup: any): PositionView {
       : null,
     sector: null,
     risk_share: null,
+    give_back_share: null,
     weight: null,
     insights: [],
   }
@@ -412,22 +434,39 @@ function mark(p: any, close: number, score: any, setup: any): PositionView {
 }
 
 /**
- * Risk and weight as shares of the book, and the insights that depend on them.
+ * Risk and weight as shares of capital, and the insights that depend on them.
  *
- * The single most common way a good signal loses money is sizing every position
- * by rupees instead of by risk. Two holdings of similar value can carry wildly
- * different amounts at stake — a wide stop on a large position is a much bigger
- * bet than the position sizes suggest — and nothing on the page said so, because
- * every number was computed one position at a time. These need the whole book,
- * so they are filled in after all of them are marked.
+ * The denominator is the whole point and it was wrong. Risk was divided by the
+ * market value of the *recorded* positions, so with two of seven holdings in
+ * the database a position risking 0.33% of capital was reported at 5.4% and
+ * flagged as oversized. The rupees were right; the denominator was whatever
+ * happened to have been entered.
+ *
+ * Capital cannot be derived — the cash beside the positions is invisible to a
+ * tracker — so it comes from the portfolio row. Without it this falls back to
+ * book value and the page says so, rather than quietly reporting a number that
+ * looks like an answer.
  */
-function withRiskShares(positions: PositionView[]): PositionView[] {
+function withRiskShares(
+  positions: PositionView[],
+  settings: PortfolioSettings | null,
+): PositionView[] {
   const book = positions.reduce((sum, p) => sum + (p.value ?? 0), 0)
-  if (book <= 0) return positions
+  const base = settings?.total_capital ?? book
+  if (base <= 0) return positions
 
   for (const p of positions) {
-    p.weight = (p.value ?? 0) / book
-    p.risk_share = p.risk_remaining === null ? null : Math.max(p.risk_remaining, 0) / book
+    p.weight = (p.value ?? 0) / base
+    // A stop above the entry means the money between here and it is open
+    // profit, not capital. Reporting that as risk is what made a position that
+    // cannot lose money look like the largest bet on the book.
+    const exposed =
+      p.stop_price !== null && p.stop_price >= p.entry_price
+        ? 0
+        : Math.max(p.risk_remaining ?? 0, 0)
+    p.risk_share = p.risk_remaining === null ? null : exposed / base
+    p.give_back_share =
+      p.risk_remaining === null ? null : Math.max(p.risk_remaining, 0) / base
   }
 
   // Recomputed rather than appended, so the risk sentences sit in the same
@@ -457,7 +496,16 @@ function insightsFor(
   if (v.risk_share !== null && v.risk_share > RISK_UNIT_LIMIT) {
     out.push({
       tone: 'warn',
-      text: `${(v.risk_share * 100).toFixed(1)}% of the book is at stake between here and this stop — a risk unit is normally 1%.`,
+      text: `${(v.risk_share * 100).toFixed(1)}% of capital is at stake between here and this stop — a risk unit is normally 1%.`,
+    })
+  } else if (
+    v.risk_share === 0 &&
+    v.give_back_share !== null &&
+    v.give_back_share > RISK_UNIT_LIMIT
+  ) {
+    out.push({
+      tone: 'good',
+      text: `The stop is above cost, so none of this is capital at risk — but ${(v.give_back_share * 100).toFixed(1)}% of capital in open profit sits between here and it.`,
     })
   }
   if (existing) {

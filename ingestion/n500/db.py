@@ -52,6 +52,7 @@ PAGE_ORDER = {
     "backtest_runs": ("id",),
     "backtest_trades": ("id",),
     "live_quotes": ("name",),
+    "portfolio": ("id",),
     "owners": ("email",),
 }
 

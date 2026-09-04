@@ -4,6 +4,7 @@
     python -m n500.jobs.manage_position close TATACHEM --price 690 --reason target --dry-run
     python -m n500.jobs.manage_position move-stop TATACHEM --stop 585
     python -m n500.jobs.manage_position move-stop --all --to-suggested --dry-run
+    python -m n500.jobs.manage_position capital --set 2000000
     python -m n500.jobs.manage_position list --dry-run
 
 The browser is the intended place for this once Supabase is connected — the
@@ -49,6 +50,44 @@ def _suggested_stops(db: Db) -> dict[str, float]:
         for r in rows
         if r["date"] == latest and r.get("plan_stop") is not None
     }
+
+
+def _capital(db: Db, args) -> int:
+    """Read or set total capital.
+
+    It cannot be derived from the positions: a tracker sees what it is told
+    about and the cash beside it is invisible. Stating it wrong is worse than
+    leaving it unset, because every risk percentage on the page divides by it.
+    """
+    current = db.select("portfolio")
+    if args.set_value is None:
+        if not current:
+            print(f"[{JOB}] no capital set — risk percentages have no denominator")
+            return 0
+        row = current[0]
+        print(f"[{JOB}] capital {float(row['total_capital']):,.0f}, "
+              f"risking {float(row['risk_pct']):.1%} per position "
+              f"= {float(row['total_capital']) * float(row['risk_pct']):,.0f} a unit")
+        return 0
+
+    if args.set_value <= 0:
+        print(f"[{JOB}] capital must be positive", file=sys.stderr)
+        return 1
+
+    risk_pct = args.risk_pct
+    if risk_pct is None:
+        risk_pct = float(current[0]["risk_pct"]) if current else 0.01
+    if not 0 < risk_pct < 1:
+        print(f"[{JOB}] --risk-pct is a fraction, so 0.01 for 1%", file=sys.stderr)
+        return 1
+
+    row = {"id": 1, "total_capital": args.set_value, "risk_pct": risk_pct}
+    with run(JOB, db=db) as log:
+        log.rows_written = db.upsert("portfolio", [row], on_conflict="id")
+        log.notes = f"capital {args.set_value:,.0f} at {risk_pct:.1%}"
+    print(f"[{JOB}] capital {args.set_value:,.0f}, risking {risk_pct:.1%} "
+          f"= {args.set_value * risk_pct:,.0f} a unit")
+    return 0
 
 
 def decide_stop_change(
@@ -133,7 +172,9 @@ def _next_id(rows: list[dict]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Record and close positions")
-    parser.add_argument("action", choices=("open", "close", "list", "move-stop"))
+    parser.add_argument(
+        "action", choices=("open", "close", "list", "move-stop", "capital")
+    )
     parser.add_argument("symbol", nargs="?")
     parser.add_argument("--qty", type=float)
     parser.add_argument("--price", type=float)
@@ -150,6 +191,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="move-stop: use the engine's plan_stop")
     parser.add_argument("--force", action="store_true",
                         help="move-stop: allow lowering a stop, which is almost never right")
+    parser.add_argument("--set", type=float, dest="set_value",
+                        help="capital: total capital in rupees")
+    parser.add_argument("--risk-pct", type=float,
+                        help="capital: fraction risked per position (default 0.01)")
     args = parser.parse_args(argv)
 
     db = Db(force_dry_run=args.dry_run)
@@ -166,6 +211,9 @@ def main(argv: list[str] | None = None) -> int:
                    if c in frame]
         print(frame[columns].to_string(index=False))
         return 0
+
+    if args.action == "capital":
+        return _capital(db, args)
 
     if args.action == "move-stop":
         return _move_stop(db, args, existing)

@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import { AlertTriangle, CircleAlert, Info } from 'lucide-react'
 import type { AlertRow, Severity } from '../types'
 import { pct } from '../lib/format'
-import { loadAlerts, loadPortfolio, loadScreener, type PositionView } from '../lib/load'
+import { loadAlerts, loadPortfolio, loadScreener,
+         type PortfolioSettings, type PositionView } from '../lib/load'
 import { AddHolding } from '../components/AddHolding'
 
 const SEVERITY_STYLE: Record<Severity, { chip: string; icon: React.ReactNode; label: string }> = {
@@ -26,13 +27,18 @@ const SEVERITY_STYLE: Record<Severity, { chip: string; icon: React.ReactNode; la
 
 export function Portfolio() {
   const [positions, setPositions] = useState<PositionView[]>([])
+  const [settings, setSettings] = useState<PortfolioSettings | null>(null)
   const [universe, setUniverse] = useState<any[]>([])
   const [alerts, setAlerts] = useState<AlertRow[]>([])
   const [reload, setReload] = useState(0)
 
   useEffect(() => {
     let cancelled = false
-    loadPortfolio().then(({ positions }) => !cancelled && setPositions(positions))
+    loadPortfolio().then(({ positions, settings }) => {
+      if (cancelled) return
+      setPositions(positions)
+      setSettings(settings)
+    })
     loadAlerts().then((rows) => !cancelled && setAlerts(rows))
     return () => {
       cancelled = true
@@ -51,6 +57,9 @@ export function Portfolio() {
     pnl: value - invested,
     return_pct: invested ? value / invested - 1 : null,
     risk_remaining: positions.reduce((s, p) => s + (p.risk_remaining ?? 0), 0),
+    capital_at_risk: positions.reduce(
+      (s, p) => s + (p.risk_share ?? 0) * (settings?.total_capital ?? 0), 0,
+    ),
     thesis_broken: positions.filter((p) => p.thesis_intact === false).length,
   }
 
@@ -102,8 +111,20 @@ export function Portfolio() {
         </p>
       )}
 
-      <div className="mb-6">
+      <div className="mb-6 flex flex-wrap items-center gap-3">
         <AddHolding rows={universe} onAdded={() => setReload((n) => n + 1)} />
+        {settings ? (
+          <span className="font-mono text-xs text-slate-500">
+            capital ₹{(settings.total_capital / 100000).toFixed(1)}L &middot;{' '}
+            ₹{(settings.total_capital * settings.risk_pct).toLocaleString('en-IN')} a risk unit
+            {invested > 0 && <> &middot; {((invested / settings.total_capital) * 100).toFixed(0)}% deployed</>}
+          </span>
+        ) : (
+          <span className="font-mono text-xs text-amber-700 dark:text-amber-400">
+            no capital set — risk shown against book value, which understates the
+            denominator
+          </span>
+        )}
       </div>
 
       {positions.length > 0 && (
@@ -117,9 +138,13 @@ export function Portfolio() {
               tone={(totals.pnl ?? 0) >= 0 ? 'good' : 'bad'}
             />
             <Tile
-              label="Still at risk"
-              value={`₹${Math.round(totals.risk_remaining ?? 0).toLocaleString('en-IN')}`}
-              hint="to the stops from here"
+              label="Capital at risk"
+              value={`₹${Math.round(totals.capital_at_risk ?? 0).toLocaleString('en-IN')}`}
+              hint={
+                settings
+                  ? `${((totals.capital_at_risk ?? 0) / settings.total_capital * 100).toFixed(2)}% of ₹${(settings.total_capital / 100000).toFixed(1)}L`
+                  : 'no capital set — percentages use book value'
+              }
             />
             <Tile
               label="Thesis broken"
