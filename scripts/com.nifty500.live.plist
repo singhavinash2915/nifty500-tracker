@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Intraday index poll, every five minutes.
+
+  StartInterval rather than a calendar window, because the job already knows
+  the market hours and a poll outside them exits immediately without a request.
+  Keeping the schedule dumb means one place decides when the market is open.
+
+  Install:
+    cp scripts/com.nifty500.live.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nifty500.live.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nifty500.live</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/avinashsingh/Developer/nifty500-tracker/scripts/poll-live.sh</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/avinashsingh/Developer/nifty500-tracker/data/logs/live.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/avinashsingh/Developer/nifty500-tracker/data/logs/live.err.log</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/avinashsingh/Developer/nifty500-tracker</string>
+</dict>
+</plist>

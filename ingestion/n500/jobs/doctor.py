@@ -26,7 +26,7 @@ EXPECTED_TABLES = [
     "fundamentals_q", "fundamentals_y", "shareholding", "company_ratios",
     "index_prices", "support_zones", "zone_events", "scores_daily",
     "ts_setups", "fundamental_scores", "watchlist", "positions", "alerts",
-    "ingestion_runs",
+    "live_quotes", "ingestion_runs",
 ]
 
 # A table nobody has loaded yet is a different problem from a stale one.

@@ -5,6 +5,7 @@ import type { ScreenerRow, Weights } from '../types'
 import { DEFAULT_WEIGHTS } from '../types'
 import { funnel, isExcluded, pickTechnical, reblend, winningSetup } from '../lib/scoring'
 import { pct } from '../lib/format'
+import { MarketStrip } from '../components/MarketStrip'
 
 type SortKey = 'blended' | 'quality_score' | 'value_score' | 'technical' | 'mom_12_1' | 'symbol'
 type View = 'all' | 'support' | 'excluded'
@@ -79,6 +80,7 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
 
   return (
     <>
+      <MarketStrip />
       <section className="mb-8 grid gap-4 lg:grid-cols-[1fr_320px]">
         <Funnel steps={steps} />
         <WeightSliders weights={weights} onChange={setWeights} />
