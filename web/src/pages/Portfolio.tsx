@@ -118,7 +118,7 @@ export function Portfolio() {
             />
             <Tile
               label="Still at risk"
-              value={`₹${(totals.risk_remaining ?? 0).toLocaleString('en-IN')}`}
+              value={`₹${Math.round(totals.risk_remaining ?? 0).toLocaleString('en-IN')}`}
               hint="to the stops from here"
             />
             <Tile
@@ -162,7 +162,7 @@ export function Portfolio() {
                               : `${pct(p.stop_distance_pct, 0)} away`
                         } />
                   <Cell label="Still at risk"
-                        value={p.risk_remaining === null ? '—' : `₹${Math.max(p.risk_remaining, 0).toLocaleString('en-IN', {maximumFractionDigits: 0})}`}
+                        value={p.risk_remaining === null ? '—' : `₹${Math.round(Math.max(p.risk_remaining, 0)).toLocaleString('en-IN')}`}
                         hint={p.risk_share === null ? undefined : `${(p.risk_share * 100).toFixed(1)}% of the book`} />
                   <Cell label="Score" value={p.blended?.toFixed(0) ?? '—'}
                         hint={p.decile === null ? undefined : `decile ${p.decile}`} />
@@ -184,9 +184,26 @@ export function Portfolio() {
                   <Cell label="Reward : risk" value={
                     p.plan_reward_risk ? `${p.plan_reward_risk.toFixed(1)}:1` : '—'
                   } />
-                  <Cell label="R multiple" value={
-                    p.r_multiple === null ? '—' : `${p.r_multiple > 0 ? '+' : ''}${p.r_multiple.toFixed(1)}R`
-                  } hint="profit in units of risk taken" />
+                  {/* A stop above the entry leaves no risk to divide the gain
+                      by, so the R multiple is undefined — and that is the best
+                      state a position can be in, not a missing number. */}
+                  <Cell
+                    label="R multiple"
+                    value={
+                      p.r_multiple !== null
+                        ? `${p.r_multiple > 0 ? '+' : ''}${p.r_multiple.toFixed(1)}R`
+                        : p.stop_price !== null && p.stop_price >= p.entry_price
+                          ? 'risk-free'
+                          : '—'
+                    }
+                    hint={
+                      p.r_multiple !== null
+                        ? 'profit in units of risk taken'
+                        : p.stop_price !== null && p.stop_price >= p.entry_price
+                          ? 'stop is above cost — this cannot lose'
+                          : 'profit in units of risk taken'
+                    }
+                  />
                   <Cell label="Held" value={
                     p.days_held === null ? '—' : `${p.days_held}d`
                   } hint={p.days_held === null ? undefined : `of ~180`} />
