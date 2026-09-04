@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AlertTriangle } from 'lucide-react'
 import type { ScreenerRow } from '../types'
-import { pct } from '../lib/format'
+import { pct, share } from '../lib/format'
 import { loadPlans, loadPortfolio, type PortfolioSettings, type PositionView } from '../lib/load'
 import { buildShortlist, capacity, type Candidate } from '../lib/shortlist'
 
@@ -66,9 +66,9 @@ export function Shortlist({ rows }: { rows: ScreenerRow[] }) {
             <div className="mb-6 grid gap-3 sm:grid-cols-4">
               <Tile label="Capital" value={`₹${(room.capital / 100000).toFixed(1)}L`}
                     hint={`${rupees(room.unit)} a risk unit`} />
-              <Tile label="Deployed" value={pct(room.deployed_pct, 0)}
+              <Tile label="Deployed" value={share(room.deployed_pct, 0)}
                     hint={`${rupees(room.free)} not invested`} />
-              <Tile label="Risk in use" value={pct(room.risked_pct, 2)}
+              <Tile label="Risk in use" value={share(room.risked_pct, 2)}
                     hint="of capital, across every open position" />
               <Tile label="Units free" value={String(room.units_free)}
                     hint="before the book carries 6% of risk" />
