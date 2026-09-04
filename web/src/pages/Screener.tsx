@@ -9,7 +9,7 @@ import { pct } from '../lib/format'
 type SortKey = 'blended' | 'quality_score' | 'value_score' | 'technical' | 'mom_12_1' | 'symbol'
 type View = 'all' | 'support' | 'excluded'
 
-export function Screener({ rows, asOf }: { rows: ScreenerRow[]; asOf: string }) {
+export function Screener({ rows }: { rows: ScreenerRow[] }) {
   const [weights, setWeights] = useState<Weights>(DEFAULT_WEIGHTS)
   const [sort, setSort] = useState<SortKey>('blended')
   const [asc, setAsc] = useState(false)
@@ -194,7 +194,7 @@ export function Screener({ rows, asOf }: { rows: ScreenerRow[]; asOf: string }) 
         <p className="mt-3 text-sm text-slate-500">Showing 150 of {visible.length}.</p>
       )}
       <p className="mt-6 text-xs text-slate-500">
-        Prices as of <span className="font-mono">{asOf}</span>. Sliders re-rank locally
+        Sliders re-rank locally
         using the same rule as the pipeline: the technical input is max(T-M, T-S), and
         weights renormalise over whichever pillars exist. For personal research. Not
         investment advice.

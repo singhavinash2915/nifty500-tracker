@@ -51,7 +51,7 @@ export default function App() {
       <div className="mx-auto max-w-6xl px-6 py-10">
         <header className="mb-8">
           <p className="font-mono text-xs uppercase tracking-[0.15em] text-slate-500">
-            Phase 7 &middot; complete
+            {asOf ? <>Prices to {asOf}</> : <>Nifty 500 &middot; NSE</>}
           </p>
           <div className="mt-2 flex flex-wrap items-baseline gap-x-4">
             <Link to="/" className="text-3xl font-bold tracking-tight hover:opacity-80">
@@ -104,7 +104,7 @@ export default function App() {
           <p className="text-sm text-slate-500">Loading the snapshot…</p>
         ) : (
           <Routes>
-            <Route path="/" element={<Screener rows={rows} asOf={asOf} />} />
+            <Route path="/" element={<Screener rows={rows} />} />
             <Route path="/stock/:symbol" element={<StockDetail rows={rows} />} />
             <Route path="/portfolio" element={<Portfolio />} />
           </Routes>
