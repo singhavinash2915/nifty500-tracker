@@ -37,6 +37,10 @@ JOB = "compute_scores"
 WEIGHTS = settings.blend_weights
 
 
+def _num(value):
+    return None if pd.isna(value) else round(float(value), 4)
+
+
 def build_snapshot(technicals: pd.DataFrame, prices: pd.DataFrame, stocks: pd.DataFrame) -> pd.DataFrame:
     """Latest technicals row per symbol, joined to its close and sector."""
     technicals = technicals.copy()
@@ -175,6 +179,17 @@ def main(argv: list[str] | None = None) -> int:
                     "blended": None if pd.isna(value) else round(float(value), 2),
                     "winning_setup": winner.loc[symbol],
                     "setup_status": status.loc[symbol],
+                    # Copied from the technicals so the screener reads one
+                    # table; see migration 0013.
+                    "close": _num(snapshot.at[symbol, "close"]),
+                    "mom_12_1": _num(snapshot.at[symbol, "mom_12_1"]),
+                    "rs_vs_index": _num(snapshot.at[symbol, "rs_vs_index"]),
+                    "dist_52w_high": _num(snapshot.at[symbol, "dist_52w_high"]),
+                    "rsi14": _num(snapshot.at[symbol, "rsi14"]),
+                    "above_200dma": (
+                        None if pd.isna(snapshot.at[symbol, "sma200"])
+                        else bool(snapshot.at[symbol, "close"] > snapshot.at[symbol, "sma200"])
+                    ),
                     "sector_rank": None if pd.isna(sector_rank.loc[symbol]) else int(sector_rank.loc[symbol]),
                     "decile": None if pd.isna(decile.loc[symbol]) else int(decile.loc[symbol]),
                     "flags": flags_by.get(symbol, []),

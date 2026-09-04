@@ -66,7 +66,9 @@ export default function App() {
               </button>
             )}
           </div>
-          <p className="mt-2 max-w-2xl text-slate-600 dark:text-slate-400">
+          {/* Hidden on a phone: four lines of explanation before any data is a
+              poor trade on a 375px screen, and the same words are in the docs. */}
+          <p className="mt-2 hidden max-w-2xl text-slate-600 sm:block dark:text-slate-400">
             Four scores. <strong>Q</strong> and <strong>V</strong> judge the business;{' '}
             <strong>T-M</strong> rewards a stock making new highs and <strong>T-S</strong>{' '}
             one reversing off a tested support zone. A business failing a hard gate is

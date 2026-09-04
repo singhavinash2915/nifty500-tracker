@@ -17,6 +17,7 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
   const [query, setQuery] = useState('')
   const [sector, setSector] = useState('all')
   const [view, setView] = useState<View>('all')
+  const [showPanels, setShowPanels] = useState(false)
 
   const sectors = useMemo(
     () => [...new Set(rows.map((r) => r.sector).filter(Boolean))].sort() as string[],
@@ -81,7 +82,17 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
   return (
     <>
       <MarketStrip />
-      <section className="mb-8 grid gap-4 lg:grid-cols-[1fr_320px]">
+      {/* On a phone these two panels are a full screen of preamble before the
+          list they describe, so they start closed and the list starts visible. */}
+      <button
+        onClick={() => setShowPanels((v) => !v)}
+        className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm sm:hidden dark:border-slate-700"
+      >
+        {showPanels ? 'Hide' : 'Show'} gates and weights
+      </button>
+      <section className={`mb-6 gap-4 lg:grid-cols-[1fr_320px] ${
+        showPanels ? 'grid' : 'hidden sm:grid'
+      }`}>
         <Funnel steps={steps} />
         <WeightSliders weights={weights} onChange={setWeights} />
       </section>
@@ -120,7 +131,7 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
           ))}
         </select>
 
-        <div className="ml-auto flex min-w-52 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 dark:border-slate-700 dark:bg-slate-900">
+        <div className="flex w-full items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 sm:ml-auto sm:w-auto sm:min-w-52 dark:border-slate-700 dark:bg-slate-900">
           <Search className="h-4 w-4 text-slate-400" />
           <input
             value={query}
@@ -131,7 +142,58 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-800">
+      {/* Cards on a phone, table on a desktop.
+
+          A horizontally scrolling table is not a mobile layout. At 375px the
+          table showed symbol and sector and pushed every score off the right
+          edge, so the entire point of the page was reachable only by scrolling
+          sideways a column at a time. A card puts the score where the eye
+          lands first. */}
+      <div className="grid gap-2 sm:hidden">
+        {visible.slice(0, 100).map(({ row, blended, technical, setup, excluded }) => (
+          <Link
+            key={row.symbol}
+            to={`/stock/${row.symbol}`}
+            className="block rounded-md border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900"
+          >
+            <div className="flex items-baseline gap-2">
+              <span className="font-mono font-semibold">{row.symbol}</span>
+              {setup === 'support' && (
+                <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] text-sky-800 dark:bg-sky-950 dark:text-sky-300">
+                  support
+                </span>
+              )}
+              <span className="ml-auto">
+                {excluded ? (
+                  <span className="rounded bg-red-100 px-2 py-0.5 font-mono text-xs font-semibold text-red-800 dark:bg-red-950/60 dark:text-red-300">
+                    excluded
+                  </span>
+                ) : (
+                  <ScoreChip value={blended} capped={row.above_200dma === false} />
+                )}
+              </span>
+            </div>
+            <p className="mt-0.5 truncate text-xs text-slate-500">{row.company_name}</p>
+            <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono text-xs text-slate-500">
+              <span>Q {row.quality_score?.toFixed(0) ?? '—'}</span>
+              <span>V {row.value_score?.toFixed(0) ?? '—'}</span>
+              <span>T {technical?.toFixed(0) ?? '—'}</span>
+              <span className={
+                row.mom_12_1 !== null && row.mom_12_1 >= 0
+                  ? 'text-emerald-700 dark:text-emerald-400'
+                  : 'text-red-700 dark:text-red-400'
+              }>
+                {pct(row.mom_12_1)}
+              </span>
+              <span className="ml-auto tabular-nums text-slate-700 dark:text-slate-300">
+                {row.close?.toFixed(2) ?? '—'}
+              </span>
+            </div>
+          </Link>
+        ))}
+      </div>
+
+      <div className="hidden overflow-x-auto rounded-md border border-slate-200 sm:block dark:border-slate-800">
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="bg-slate-100 text-left font-mono text-[11px] uppercase tracking-wider text-slate-500 dark:bg-slate-900">
