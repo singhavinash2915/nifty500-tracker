@@ -153,6 +153,20 @@ FEATURES: dict[str, int] = {
     "zone_strength": +1,
     # Not a signal — a check that the liquidity gate is not quietly a size bet.
     "turnover_60d_cr": +1,
+    # Candlestick patterns, signed the way the textbooks sign them: the four
+    # bullish ones at support should predict up, the five bearish ones at
+    # resistance should predict down. Widely believed and thinly evidenced, so
+    # they go in here to be measured rather than into the score to be trusted.
+    "hammer_at_support": +1,
+    "inverted_hammer_at_support": +1,
+    "doji_at_support": +1,
+    "bullish_engulfing_at_support": +1,
+    "piercing_at_support": +1,
+    "shooting_star_at_resistance": -1,
+    "hanging_man_at_resistance": -1,
+    "doji_at_resistance": -1,
+    "bearish_engulfing_at_resistance": -1,
+    "dark_cloud_at_resistance": -1,
 }
 
 

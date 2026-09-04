@@ -36,7 +36,7 @@ from .. import indicators as ind
 from .. import technicals as tech
 from ..scoring import momentum, ownership, quality, redflags, revision, support, value
 from ..scoring.ranking import peer_groups
-from ..zones import reversal
+from ..zones import candles, reversal
 from ..zones.build import (
     Zone,
     build_zones,
@@ -453,7 +453,29 @@ def _overhead_at(history: SymbolHistory, index: int, price: float) -> dict:
         if nearest else None
     )
 
+    # Candle shapes at whichever band the bar actually reached. Recorded, not
+    # scored: the whole point is to find out whether the shapes add anything
+    # over the location, and a pattern that has been quietly folded into a
+    # score can never answer that.
+    patterns: dict = {}
+    if floor_below is not None:
+        patterns.update(
+            candles.at_support(
+                history.daily, index, floor=floor_below.floor, ceil=floor_below.ceil
+            )
+        )
+    if nearest is not None:
+        patterns.update(
+            candles.at_resistance(
+                history.daily, index, floor=nearest.floor, ceil=nearest.ceil
+            )
+        )
+    patterns = {k: float(v) for k, v in patterns.items()}
+    for name in candles.PANEL_FEATURES:
+        patterns.setdefault(name, 0.0)
+
     return {
+        **patterns,
         # Rated at this bar, not at the end of the frame. `zone.strength` was
         # computed once over the whole history when the zones were built, so
         # reading it here would tell a January rebalance how the level behaved
