@@ -2,6 +2,8 @@
 
     python -m n500.jobs.manage_position open  TATACHEM --qty 50 --price 612 --stop 560 --dry-run
     python -m n500.jobs.manage_position close TATACHEM --price 690 --reason target --dry-run
+    python -m n500.jobs.manage_position move-stop TATACHEM --stop 585
+    python -m n500.jobs.manage_position move-stop --all --to-suggested --dry-run
     python -m n500.jobs.manage_position list --dry-run
 
 The browser is the intended place for this once Supabase is connected — the
@@ -12,6 +14,13 @@ Opening a position without a stop is refused. A position with no predetermined
 exit is the single most reliable way to turn a six-month thesis into a two-year
 one, and the whole alert engine has nothing to say about a position it cannot
 measure risk on.
+
+A stop can be raised and never lowered. That rule is enforced here rather than
+left to memory, because lowering one is never a decision — it is always the same
+moment, where the price is approaching the level, the reasoning suddenly
+available for giving it more room is excellent, and the loss that was defined in
+advance quietly becomes undefined. `--force` exists for the genuine case, a
+position added to at a higher average, and says what it is doing.
 """
 
 from __future__ import annotations
@@ -29,13 +38,102 @@ JOB = "manage_position"
 EXIT_REASONS = ("target", "stop", "thesis_broken", "score_decay", "manual")
 
 
+def _suggested_stops(db: Db) -> dict[str, float]:
+    """The engine's plan_stop per symbol, from the most recent scoring date."""
+    rows = db.select("ts_setups", columns="symbol,date,plan_stop,plan_stop_basis")
+    if not rows:
+        return {}
+    latest = max(r["date"] for r in rows)
+    return {
+        r["symbol"]: float(r["plan_stop"])
+        for r in rows
+        if r["date"] == latest and r.get("plan_stop") is not None
+    }
+
+
+def decide_stop_change(
+    current: float | None, new: float | None, *, force: bool = False
+) -> tuple[bool, str | None]:
+    """Whether to apply a stop change, and why not when the answer is no.
+
+    Pulled out of the job so the one rule that matters can be tested without a
+    database in the way: **a stop moves up or not at all.**
+
+    Lowering one is never really a decision. It is always the same moment — the
+    price approaching the level, a suddenly excellent reason to give it more
+    room, and a loss that was defined in advance quietly becoming undefined.
+    `force` is for the genuine case, a position added to at a higher average.
+    """
+    if new is None:
+        return False, "no suggested stop for this symbol"
+    if current is None:
+        return True, None
+    if abs(new - current) < 1e-9:
+        return False, "already there"
+    if new < current and not force:
+        return False, (
+            f"would lower the stop {current:g} -> {new:g}; a stop moves up or "
+            f"not at all (--force to override)"
+        )
+    return True, None
+
+
+def _move_stop(db: Db, args, existing: list[dict]) -> int:
+    """Raise the stop on one position or all of them."""
+    open_rows = [r for r in existing if not r.get("exit_date")]
+    if args.symbol:
+        symbol = args.symbol.upper()
+        open_rows = [r for r in open_rows if r["symbol"] == symbol]
+        if not open_rows:
+            print(f"[{JOB}] no open position in {symbol}", file=sys.stderr)
+            return 1
+    elif not args.all:
+        print(f"[{JOB}] name a symbol or pass --all", file=sys.stderr)
+        return 1
+
+    suggested = _suggested_stops(db) if args.to_suggested else {}
+    if args.to_suggested and not suggested:
+        print(f"[{JOB}] no plan_stop values — run compute_zones first", file=sys.stderr)
+        return 1
+
+    updates, skipped = [], []
+    for row in open_rows:
+        symbol = row["symbol"]
+        new = suggested.get(symbol) if args.to_suggested else args.stop
+        current = row.get("stop_price")
+        current = None if current is None else float(current)
+        apply, why = decide_stop_change(current, new, force=args.force)
+        if not apply:
+            skipped.append((symbol, why))
+            continue
+
+        updates.append({"id": row["id"], "symbol": symbol, "old": current, "new": new})
+
+    for symbol, why in skipped:
+        print(f"[{JOB}] {symbol}: skipped — {why}")
+
+    if not updates:
+        print(f"[{JOB}] nothing to change")
+        return 0
+
+    with run(JOB, db=db) as log:
+        for u in updates:
+            db.update("positions", {"stop_price": u["new"]}, where={"id": u["id"]})
+            old = "none" if u["old"] is None else f"{u['old']:g}"
+            print(f"[{JOB}] {u['symbol']}: stop {old} -> {u['new']:g}")
+        log.symbols_ok = len(updates)
+        log.rows_written = len(updates)
+        log.notes = f"raised {len(updates)} stop(s)"
+    return 0
+
+
 def _next_id(rows: list[dict]) -> int:
     return max((int(r.get("id") or 0) for r in rows), default=0) + 1
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Record and close positions")
-    parser.add_argument("action", choices=("open", "close", "list"))
+    parser.add_argument("action", choices=("open", "close", "list", "move-stop"))
     parser.add_argument("symbol", nargs="?")
     parser.add_argument("--qty", type=float)
     parser.add_argument("--price", type=float)
@@ -46,6 +144,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reason", choices=EXIT_REASONS, default="manual")
     parser.add_argument("--date", help="ISO date; defaults to today")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--all", action="store_true",
+                        help="move-stop: every open position")
+    parser.add_argument("--to-suggested", action="store_true",
+                        help="move-stop: use the engine's plan_stop")
+    parser.add_argument("--force", action="store_true",
+                        help="move-stop: allow lowering a stop, which is almost never right")
     args = parser.parse_args(argv)
 
     db = Db(force_dry_run=args.dry_run)
@@ -62,6 +166,9 @@ def main(argv: list[str] | None = None) -> int:
                    if c in frame]
         print(frame[columns].to_string(index=False))
         return 0
+
+    if args.action == "move-stop":
+        return _move_stop(db, args, existing)
 
     if not args.symbol:
         print(f"[{JOB}] a symbol is required for {args.action}", file=sys.stderr)
