@@ -220,3 +220,33 @@ def test_candidate_days_include_weekends():
     days = trading_day_candidates(7, end=d(2025, 2, 3))
     assert d(2025, 2, 1) in days       # Saturday — Budget session
     assert d(2025, 2, 2) in days       # Sunday — will 404 and be skipped
+
+
+def test_a_miss_recorded_before_the_day_ended_is_not_believed(tmp_path, monkeypatch):
+    """A probe at 09:11 on a trading morning wrote a permanent "no session"
+    marker for that day. The pipeline would have sat one day behind for good,
+    and a skipped date looks exactly like a holiday in the logs."""
+    import os, time
+    from datetime import date as d, datetime, timedelta
+
+    monkeypatch.setattr(bhavcopy, "CACHE_DIR", tmp_path)
+    session = d(2026, 9, 3)
+    marker = bhavcopy._miss_path(session)
+    marker.touch()
+
+    # Recorded during the session's own morning: not to be trusted.
+    morning = datetime.combine(session, datetime.min.time()) + timedelta(hours=9)
+    os.utime(marker, (morning.timestamp(), morning.timestamp()))
+    assert not bhavcopy._miss_is_settled(session)
+
+    # Recorded the next day, once the day was genuinely over.
+    after = datetime.combine(session, datetime.min.time()) + timedelta(days=1, hours=2)
+    os.utime(marker, (after.timestamp(), after.timestamp()))
+    assert bhavcopy._miss_is_settled(session)
+
+
+def test_no_marker_means_no_cached_miss(tmp_path, monkeypatch):
+    from datetime import date as d
+
+    monkeypatch.setattr(bhavcopy, "CACHE_DIR", tmp_path)
+    assert not bhavcopy._miss_is_settled(d(2026, 9, 3))

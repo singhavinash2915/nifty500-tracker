@@ -27,7 +27,7 @@ import csv
 import io
 import zipfile
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import httpx
 
@@ -115,8 +115,31 @@ def _miss_path(on: date):
     weekends (NSE runs a special Budget-day session on 1 February even when it
     falls on a Saturday) and re-fetching a few hundred certain 404s on every
     run would be the slowest part of the job.
+
+    A miss is only permanent once the day is over. See `_miss_is_settled`.
     """
     return CACHE_DIR / f"{on:%Y%m%d}.nosession"
+
+
+def _miss_is_settled(on: date) -> bool:
+    """Whether a cached 404 for `on` can still be believed.
+
+    Not every 404 means the same thing. For a Sunday two years ago it means the
+    exchange did not trade and never will; for this afternoon it means the file
+    has not been published yet. Both were being cached identically, so a probe
+    run at 09:11 on a trading morning wrote a permanent "no session" marker for
+    that day and the pipeline would have sat one day behind for good — silently,
+    since a skipped date looks exactly like a holiday in the logs.
+
+    A miss is trusted only if it was recorded after the day it describes had
+    finished. Anything recorded during or before that day is re-checked.
+    """
+    path = _miss_path(on)
+    if not path.exists():
+        return False
+    recorded = datetime.fromtimestamp(path.stat().st_mtime)
+    settled_from = datetime.combine(on, datetime.min.time()) + timedelta(days=1)
+    return recorded >= settled_from
 
 
 def fetch_raw(client: httpx.Client, on: date, *, use_cache: bool = True) -> str:
@@ -128,7 +151,7 @@ def fetch_raw(client: httpx.Client, on: date, *, use_cache: bool = True) -> str:
     cached = _cache_path(on)
     if use_cache and cached.exists():
         return cached.read_text()
-    if use_cache and _miss_path(on).exists():
+    if use_cache and _miss_is_settled(on):
         raise BhavcopyUnavailable(f"no bhavcopy for {on} (cached miss)")
 
     response = client.get(ARCHIVE_URL.format(yyyymmdd=f"{on:%Y%m%d}"))
