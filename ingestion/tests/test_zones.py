@@ -1,5 +1,7 @@
 """Zone construction, reversal confirmation and the T-S gates."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -445,3 +447,37 @@ class TestZoneStatisticsAreAsOfABar:
         assert len(z.breaks_by(30)) == 0
         assert len(z.breaks_by(60)) == 1
         assert len(z.touches_by(15)) == 1
+
+
+class TestVolumeShelvesEdgeBars:
+    """Bars sitting exactly on the window's high or low.
+
+    Found by running the engine over companies that left the index: a stock
+    winding down prints flat bars, and one at the very top of the range put
+    both bin indices past the last bin — an empty slice, a divide by zero, and
+    that bar's volume quietly discarded.
+    """
+
+    def frame(self) -> pd.DataFrame:
+        rows = []
+        for i in range(60):
+            rows.append({"open": 100.0, "high": 101.0, "low": 99.0,
+                         "close": 100.0, "volume": 1000.0})
+        # A flat bar exactly on the window high, then one exactly on the low.
+        rows.append({"open": 101.0, "high": 101.0, "low": 101.0,
+                     "close": 101.0, "volume": 50000.0})
+        rows.append({"open": 99.0, "high": 99.0, "low": 99.0,
+                     "close": 99.0, "volume": 50000.0})
+        index = pd.date_range("2024-01-01", periods=len(rows), freq="B")
+        return pd.DataFrame(rows, index=index)
+
+    def test_no_warning_is_raised(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            volume_shelves(self.frame())
+
+    def test_a_bar_on_the_high_still_contributes_its_volume(self):
+        # 50,000 on one bar against 1,000 on sixty others: if that bar were
+        # dropped the top of the range would not register as a shelf at all.
+        shelves = volume_shelves(self.frame())
+        assert shelves, "the heaviest bar produced no shelf"

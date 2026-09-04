@@ -289,7 +289,14 @@ def volume_shelves(
             continue
         start = np.searchsorted(edges, bar_low, side="right") - 1
         stop = np.searchsorted(edges, bar_high, side="left")
-        start, stop = max(start, 0), min(max(stop, start + 1), bins)
+        # A bar sitting exactly on the top edge lands both indices at `bins`,
+        # which spreads its volume over an empty slice and divides by zero on
+        # the way. Numerically it was harmless — an empty slice absorbs the
+        # infinity — but it warned on every flat bar at the high, which the
+        # delisted names have plenty of, and it silently dropped that bar's
+        # volume. Clamping `start` inside the bins guarantees at least one.
+        start = min(max(start, 0), bins - 1)
+        stop = min(max(stop, start + 1), bins)
         weights[start:stop] += volume / (stop - start)
 
     total = weights.sum()
