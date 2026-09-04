@@ -180,3 +180,104 @@ export function capacity(held: PositionView[], settings: PortfolioSettings | nul
     ),
   }
 }
+
+
+export interface BasketEffect {
+  count: number
+  cost: number
+  risk: number
+  risk_units: number
+  /** Deployment and risk after taking every selected candidate. */
+  deployed_after: number
+  risked_after: number
+  free_after: number
+  /** Sectors that would exceed the cap once the basket is added. */
+  sector_breaches: { sector: string; share: number }[]
+  warnings: string[]
+}
+
+/**
+ * What taking several candidates together would do to the book.
+ *
+ * Each card sizes one name against capital as it stands, which is correct for
+ * one decision and wrong for five. Take all five and the sector arithmetic no
+ * longer holds, the risk budget is spent several times over, and each card is
+ * still cheerfully reporting that it fits. This is the only place the
+ * interaction between them is visible.
+ *
+ * `RISK_BUDGET` is the portfolio-level limit the individual position cap says
+ * nothing about: six risk units open at once, so a correlated drawdown across
+ * the whole book costs about 6% rather than an unbounded amount.
+ */
+export const RISK_BUDGET = 0.06
+
+export function basketEffect(
+  chosen: Candidate[],
+  held: PositionView[],
+  settings: PortfolioSettings | null,
+): BasketEffect | null {
+  if (!settings) return null
+  const capital = settings.total_capital
+  const unit = capital * settings.risk_pct
+
+  const cost = chosen.reduce((s, c) => s + c.cost, 0)
+  const risk = chosen.reduce((s, c) => s + c.risk, 0)
+
+  const deployedNow = held.reduce((s, p) => s + (p.value ?? 0), 0)
+  const riskedNow = held.reduce(
+    (s, p) => s + (p.risk_share ?? 0) * capital, 0,
+  )
+
+  // Sector exposure has to count the basket against itself, not only against
+  // what is already held — two candidates in the same sector each pass the cap
+  // alone and breach it together.
+  const bySector = new Map<string, number>()
+  for (const p of held) {
+    const k = p.sector ?? 'Unknown'
+    bySector.set(k, (bySector.get(k) ?? 0) + (p.value ?? 0))
+  }
+  for (const c of chosen) {
+    const k = c.row.sector ?? 'Unknown'
+    bySector.set(k, (bySector.get(k) ?? 0) + c.cost)
+  }
+
+  const sector_breaches = [...bySector.entries()]
+    .map(([sector, value]) => ({ sector, share: value / capital }))
+    .filter((s) => s.share > SECTOR_CAP)
+    .sort((a, b) => b.share - a.share)
+
+  const riskedAfter = riskedNow + risk
+  const warnings: string[] = []
+  if (riskedAfter > capital * RISK_BUDGET) {
+    warnings.push(
+      `Open risk would reach ${(riskedAfter / capital * 100).toFixed(1)}% of capital, ` +
+      `above the ${RISK_BUDGET * 100}% budget. A correlated fall takes all of it at once.`,
+    )
+  }
+  if (deployedNow + cost > capital) {
+    warnings.push('That is more than the capital available.')
+  }
+  for (const s of sector_breaches) {
+    warnings.push(
+      `${s.sector} would be ${(s.share * 100).toFixed(0)}% of capital — above the ${SECTOR_CAP * 100}% cap.`,
+    )
+  }
+  if (chosen.length >= 4) {
+    warnings.push(
+      'Entering several positions on one day makes the whole basket one bet on ' +
+      'that day. Tranching over weeks costs nothing and removes the timing risk.',
+    )
+  }
+
+  return {
+    count: chosen.length,
+    cost,
+    risk,
+    risk_units: risk / unit,
+    deployed_after: (deployedNow + cost) / capital,
+    risked_after: riskedAfter / capital,
+    free_after: capital - deployedNow - cost,
+    sector_breaches,
+    warnings,
+  }
+}

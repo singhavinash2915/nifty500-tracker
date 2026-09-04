@@ -4,7 +4,7 @@ import { AlertTriangle } from 'lucide-react'
 import type { ScreenerRow } from '../types'
 import { pct, share } from '../lib/format'
 import { loadPlans, loadPortfolio, type PortfolioSettings, type PositionView } from '../lib/load'
-import { buildShortlist, capacity, type Candidate } from '../lib/shortlist'
+import { basketEffect, buildShortlist, capacity, type Candidate } from '../lib/shortlist'
 
 const rupees = (v: number | null | undefined) =>
   `₹${Math.round(v ?? 0).toLocaleString('en-IN')}`
@@ -21,6 +21,7 @@ export function Shortlist({ rows }: { rows: ScreenerRow[] }) {
   const [settings, setSettings] = useState<PortfolioSettings | null>(null)
   const [plans, setPlans] = useState<Awaited<ReturnType<typeof loadPlans>>>(new Map())
   const [loading, setLoading] = useState(true)
+  const [picked, setPicked] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     let cancelled = false
@@ -39,6 +40,15 @@ export function Shortlist({ rows }: { rows: ScreenerRow[] }) {
   const ranked = [...rows].sort((a, b) => (b.conviction ?? -1) - (a.conviction ?? -1))
   const candidates = buildShortlist({ rows: ranked, plans, held, settings })
   const room = capacity(held, settings)
+  const chosen = candidates.filter((c) => picked.has(c.row.symbol))
+  const basket = basketEffect(chosen, held, settings)
+
+  const toggle = (symbol: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev)
+      next.has(symbol) ? next.delete(symbol) : next.add(symbol)
+      return next
+    })
 
   return (
     <>
@@ -84,9 +94,59 @@ export function Shortlist({ rows }: { rows: ScreenerRow[] }) {
           ) : (
             <div className="grid gap-3">
               {candidates.map((c) => (
-                <CandidateCard key={c.row.symbol} candidate={c} />
+                <CandidateCard
+                  key={c.row.symbol}
+                  candidate={c}
+                  picked={picked.has(c.row.symbol)}
+                  onToggle={() => toggle(c.row.symbol)}
+                />
               ))}
             </div>
+          )}
+
+          {basket && basket.count > 0 && (
+            <section className="sticky bottom-4 mt-4 rounded-md border border-slate-300 bg-white p-4 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+              <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
+                <span className="font-mono text-[11px] uppercase tracking-wider text-slate-500">
+                  {basket.count} selected
+                </span>
+                <span className="font-mono tabular-nums">
+                  {rupees(basket.cost)}
+                  <span className="ml-1 text-xs text-slate-500">to invest</span>
+                </span>
+                <span className="font-mono tabular-nums">
+                  {rupees(basket.risk)}
+                  <span className="ml-1 text-xs text-slate-500">
+                    at risk · {basket.risk_units.toFixed(1)} units
+                  </span>
+                </span>
+                <span className="font-mono tabular-nums">
+                  {share(basket.deployed_after, 0)}
+                  <span className="ml-1 text-xs text-slate-500">deployed after</span>
+                </span>
+                <span className="font-mono tabular-nums">
+                  {share(basket.risked_after, 2)}
+                  <span className="ml-1 text-xs text-slate-500">of capital at risk after</span>
+                </span>
+                <button
+                  onClick={() => setPicked(new Set())}
+                  className="ml-auto text-xs text-slate-500 underline underline-offset-4"
+                >
+                  clear
+                </button>
+              </div>
+
+              {basket.warnings.length > 0 && (
+                <ul className="mt-3 grid gap-1 border-t border-slate-200 pt-3 text-sm dark:border-slate-800">
+                  {basket.warnings.map((w) => (
+                    <li key={w} className="flex items-start gap-2 text-amber-900 dark:text-amber-300">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>{w}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
           )}
 
           <p className="mt-6 max-w-2xl text-xs text-slate-500">
@@ -101,11 +161,28 @@ export function Shortlist({ rows }: { rows: ScreenerRow[] }) {
   )
 }
 
-function CandidateCard({ candidate: c }: { candidate: Candidate }) {
+function CandidateCard({
+  candidate: c, picked, onToggle,
+}: {
+  candidate: Candidate
+  picked: boolean
+  onToggle: () => void
+}) {
   const { row } = c
   return (
-    <div className="rounded-md border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+    <div className={`rounded-md border p-4 ${
+      picked
+        ? 'border-slate-400 bg-slate-50 dark:border-slate-600 dark:bg-slate-800/60'
+        : 'border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900'
+    }`}>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <input
+          type="checkbox"
+          checked={picked}
+          onChange={onToggle}
+          aria-label={`Include ${row.symbol} in the basket`}
+          className="mr-1 h-4 w-4 self-center accent-slate-800 dark:accent-slate-300"
+        />
         <Link to={`/stock/${row.symbol}`} className="font-mono text-base font-semibold hover:underline">
           {row.symbol}
         </Link>
