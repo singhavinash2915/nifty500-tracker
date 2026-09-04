@@ -209,18 +209,59 @@ def valuation_at(
 # --- the cross-section at a date ------------------------------------------
 
 
+class Membership:
+    """Who was in the index on a given date.
+
+    Built from archived constituent lists. `members_at` resolves to the most
+    recent snapshot *at or before* the date asked about, which is the whole
+    point: a list captured later knows which companies went on to do well, and
+    scoring a cross-section against it is how a backtest quietly picks its
+    sample from the answer.
+
+    With no snapshots at all this passes everything through. That keeps the
+    engine usable before the membership job has run, at the cost of the bias —
+    so `has_history` is exposed for callers that want to say which they got.
+    """
+
+    def __init__(self, rows: list[dict] | None = None) -> None:
+        self._by_date: dict[date, set[str]] = {}
+        for row in rows or []:
+            when = row["week_start"]
+            when = when if isinstance(when, date) else date.fromisoformat(str(when)[:10])
+            self._by_date.setdefault(when, set()).add(row["symbol"])
+        self._dates = sorted(self._by_date)
+
+    @property
+    def has_history(self) -> bool:
+        return bool(self._dates)
+
+    def snapshot_for(self, as_of: date) -> date | None:
+        earlier = [d for d in self._dates if d <= as_of]
+        return earlier[-1] if earlier else (self._dates[0] if self._dates else None)
+
+    def members_at(self, as_of: date) -> set[str] | None:
+        """The constituents to score, or None when membership is unknown."""
+        stamp = self.snapshot_for(as_of)
+        return self._by_date[stamp] if stamp else None
+
+
 def score_cross_section(
     histories: dict[str, SymbolHistory],
     fundamentals: dict[str, dict[str, pd.DataFrame]],
     as_of: date,
     *,
     quality_gate: bool = True,
+    membership: "Membership | None" = None,
 ) -> pd.DataFrame:
     """Q, V, T-M, T-S and the red flags for every symbol, as of `as_of`."""
     rows: list[dict] = []
     setups: dict[str, support.SupportSetup] = {}
 
+    members = membership.members_at(as_of) if membership else None
+
     for symbol, history in histories.items():
+        if members is not None and symbol not in members:
+            continue
         index = history.index_at(as_of)
         if index is None:
             continue

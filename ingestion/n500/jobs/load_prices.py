@@ -59,11 +59,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.symbols:
         universe = {s.strip().upper() for s in args.symbols.split(",")}
+        active = universe
     else:
-        universe = {
-            row["symbol"] for row in db.select("stocks", "symbol,is_active")
-            if row.get("is_active", True)
-        }
+        stocks = db.select("stocks", "symbol,is_active")
+        active = {r["symbol"] for r in stocks if r.get("is_active", True)}
+        # Companies that have left the index are loaded too. The bhavcopy is
+        # the whole market on each day, so their history costs no extra
+        # requests — only rows — and without it the backtest can only ever see
+        # the survivors, which is the bias this is here to remove.
+        universe = {r["symbol"] for r in stocks}
     if not universe:
         print(f"[{JOB}] universe is empty — run load_universe first", file=sys.stderr)
         return 1
@@ -99,15 +103,19 @@ def main(argv: list[str] | None = None) -> int:
             actions += len(bhavcopy.corporate_actions(quotes))
             log.symbols_ok += 1
 
-        for missed in sorted(universe - per_symbol.keys()):
-            # A Nifty 500 name absent from every session is a symbol-mapping
-            # problem, not a market event. Surface it rather than shrugging.
+        for missed in sorted(active - per_symbol.keys()):
+            # A *current* Nifty 500 name absent from every session is a
+            # symbol-mapping problem, not a market event. A delisted one is
+            # simply gone, which is the whole point of keeping it, so only the
+            # active list is checked.
             log.error(missed, "not present in any bhavcopy session")
 
         log.rows_written = db.upsert("prices_daily", rows, on_conflict="symbol,date")
+        gone = len(universe) - len(active)
         log.notes = (
             f"{sessions} sessions ({missing} holidays skipped), "
-            f"{len(per_symbol)} symbols, {actions} corporate actions adjusted"
+            f"{len(per_symbol)} symbols ({gone} no longer in the index), "
+            f"{actions} corporate actions adjusted"
         )
         summary = log.notes
 

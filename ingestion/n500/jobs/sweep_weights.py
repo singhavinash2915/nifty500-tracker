@@ -37,6 +37,16 @@ def build_panel(db: Db, *, hold: int, limit: int | None) -> pd.DataFrame:
     if not histories:
         raise SystemExit(f"[{JOB}] no symbol has enough history")
 
+    membership = pointintime.Membership(db.select("index_membership"))
+    if membership.has_history:
+        print(f"[{JOB}] scoring point-in-time index membership")
+    else:
+        print(
+            f"[{JOB}] WARNING: no membership history — scoring today's index "
+            f"back through the whole period, which is survivorship-biased",
+            file=sys.stderr,
+        )
+
     calendar = max((h.daily.index for h in histories.values()), key=len)
     dates = engine.month_end_dates(calendar, warmup=pointintime.WARMUP_BARS, forward=hold)
     if not dates:
@@ -44,7 +54,9 @@ def build_panel(db: Db, *, hold: int, limit: int | None) -> pd.DataFrame:
 
     rows: list[dict] = []
     for as_of in dates:
-        frame = pointintime.score_cross_section(histories, fundamentals, as_of)
+        frame = pointintime.score_cross_section(
+            histories, fundamentals, as_of, membership=membership
+        )
         if frame.empty:
             continue
         for symbol, row in frame.iterrows():
@@ -78,7 +90,12 @@ def build_panel(db: Db, *, hold: int, limit: int | None) -> pd.DataFrame:
                     },
                 }
             )
-        print(f"[{JOB}]   {as_of}: {len(rows)} rows so far", flush=True)
+        stamp = membership.snapshot_for(as_of)
+        print(
+            f"[{JOB}]   {as_of}: {len(rows)} rows so far"
+            + (f" (index as at {stamp})" if stamp else ""),
+            flush=True,
+        )
 
     panel = pd.DataFrame(rows)
     # An excluded business never reaches the screener, so it must not shape the
