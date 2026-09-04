@@ -4,6 +4,7 @@
     python -m n500.jobs.manage_position close TATACHEM --price 690 --reason target --dry-run
     python -m n500.jobs.manage_position move-stop TATACHEM --stop 585
     python -m n500.jobs.manage_position move-stop --all --to-suggested --dry-run
+    python -m n500.jobs.manage_position edit GOLDBEES --entry-date 2026-07-01
     python -m n500.jobs.manage_position capital --set 2000000
     python -m n500.jobs.manage_position list --dry-run
 
@@ -50,6 +51,58 @@ def _suggested_stops(db: Db) -> dict[str, float]:
         for r in rows
         if r["date"] == latest and r.get("plan_stop") is not None
     }
+
+
+def _edit(db: Db, args, existing: list[dict]) -> int:
+    """Correct the recorded facts about an open position.
+
+    Entry date, price and quantity — the things typed in once and then wrong
+    forever. Six of the seven holdings here were loaded from screenshots that
+    did not carry a purchase date, so they were recorded as the day they were
+    entered and "days held" was meaningless until this existed.
+
+    The stop is deliberately *not* editable here: it goes through `move-stop`,
+    which will not lower one. Allowing a stop to be set to anything under the
+    banner of a correction would route straight around that rule.
+    """
+    if not args.symbol and not args.all:
+        print(f"[{JOB}] name a symbol or pass --all", file=sys.stderr)
+        return 1
+
+    rows = [r for r in existing if not r.get("exit_date")]
+    if args.symbol:
+        symbol = args.symbol.upper()
+        rows = [r for r in rows if r["symbol"] == symbol]
+        if not rows:
+            print(f"[{JOB}] no open position in {symbol}", file=sys.stderr)
+            return 1
+
+    changes: dict[str, object] = {}
+    if args.entry_date:
+        try:
+            changes["entry_date"] = date.fromisoformat(args.entry_date).isoformat()
+        except ValueError:
+            print(f"[{JOB}] --entry-date must be ISO, like 2026-07-01", file=sys.stderr)
+            return 1
+    if args.price is not None:
+        changes["entry_price"] = args.price
+    if args.qty is not None:
+        changes["quantity"] = args.qty
+
+    if not changes:
+        print(f"[{JOB}] nothing to change — pass --entry-date, --price or --qty",
+              file=sys.stderr)
+        return 1
+
+    with run(JOB, db=db) as log:
+        for row in rows:
+            db.update("positions", changes, where={"id": row["id"]})
+            was = ", ".join(f"{k}={row.get(k)}" for k in changes)
+            now = ", ".join(f"{k}={v}" for k, v in changes.items())
+            print(f"[{JOB}] {row['symbol']}: {was}  ->  {now}")
+        log.symbols_ok = log.rows_written = len(rows)
+        log.notes = f"edited {len(rows)} position(s): {', '.join(changes)}"
+    return 0
 
 
 def _capital(db: Db, args) -> int:
@@ -173,7 +226,8 @@ def _next_id(rows: list[dict]) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Record and close positions")
     parser.add_argument(
-        "action", choices=("open", "close", "list", "move-stop", "capital")
+        "action",
+        choices=("open", "close", "list", "move-stop", "capital", "edit"),
     )
     parser.add_argument("symbol", nargs="?")
     parser.add_argument("--qty", type=float)
@@ -195,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="capital: total capital in rupees")
     parser.add_argument("--risk-pct", type=float,
                         help="capital: fraction risked per position (default 0.01)")
+    parser.add_argument("--entry-date", help="edit: ISO date the position was opened")
     args = parser.parse_args(argv)
 
     db = Db(force_dry_run=args.dry_run)
@@ -211,6 +266,9 @@ def main(argv: list[str] | None = None) -> int:
                    if c in frame]
         print(frame[columns].to_string(index=False))
         return 0
+
+    if args.action == "edit":
+        return _edit(db, args, existing)
 
     if args.action == "capital":
         return _capital(db, args)

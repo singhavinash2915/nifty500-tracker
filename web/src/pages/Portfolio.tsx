@@ -6,6 +6,7 @@ import { pct } from '../lib/format'
 import { loadAlerts, loadPortfolio, loadScreener,
          type PortfolioSettings, type PositionView } from '../lib/load'
 import { AddHolding } from '../components/AddHolding'
+import { EditHolding } from '../components/EditHolding'
 
 const rupees = (v: number | null | undefined) =>
   `₹${Math.round(v ?? 0).toLocaleString('en-IN')}`
@@ -169,6 +170,7 @@ export function Portfolio() {
                     {p.quantity} @ {p.entry_price.toFixed(2)}
                     {p.entry_date && <> since {p.entry_date}</>}
                   </span>
+                  <EditHolding position={p} onSaved={() => setReload((n) => n + 1)} />
                   <span className={`ml-auto font-mono text-lg tabular-nums ${
                     (p.return_pct ?? 0) >= 0 ? 'text-emerald-700 dark:text-emerald-400'
                                              : 'text-red-700 dark:text-red-400'}`}>
