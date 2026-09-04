@@ -274,13 +274,11 @@ export async function loadPortfolio(): Promise<{
       const close = firstBy(prices.data as any[])
       const setup = firstBy(setups.data as any[])
 
-      return {
-        positions: rows.map((p) =>
-          mark(p, Number(close.get(p.symbol)?.adj_close ?? NaN),
-               score.get(p.symbol), setup.get(p.symbol)),
-        ),
-        source: 'supabase',
-      }
+      const marked = rows.map((p) =>
+        mark(p, Number(close.get(p.symbol)?.adj_close ?? NaN),
+             score.get(p.symbol), setup.get(p.symbol)),
+      )
+      return { positions: withRiskShares(marked), source: 'supabase' }
     } catch {
       // fall through
     }
@@ -313,6 +311,10 @@ export interface PositionView {
   failed_gates: string[]
   thesis_intact: boolean | null
   zone_floor: number | null
+  /** Rupees at risk here as a share of the whole book's market value. */
+  risk_share: number | null
+  /** This position's market value as a share of the book. */
+  weight: number | null
   /** Short sentences describing what needs attention, most urgent first. */
   insights: { tone: 'bad' | 'warn' | 'good'; text: string }[]
 }
@@ -349,6 +351,8 @@ function mark(p: any, close: number, score: any, setup: any): PositionView {
     failed_gates: failed,
     thesis_intact: score ? failed.length === 0 : null,
     zone_floor: setup?.zone_floor ?? null,
+    risk_share: null,
+    weight: null,
     insights: [],
   }
 
@@ -356,9 +360,56 @@ function mark(p: any, close: number, score: any, setup: any): PositionView {
   return view
 }
 
+/**
+ * Risk and weight as shares of the book, and the insights that depend on them.
+ *
+ * The single most common way a good signal loses money is sizing every position
+ * by rupees instead of by risk. Two holdings of similar value can carry wildly
+ * different amounts at stake — a wide stop on a large position is a much bigger
+ * bet than the position sizes suggest — and nothing on the page said so, because
+ * every number was computed one position at a time. These need the whole book,
+ * so they are filled in after all of them are marked.
+ */
+function withRiskShares(positions: PositionView[]): PositionView[] {
+  const book = positions.reduce((sum, p) => sum + (p.value ?? 0), 0)
+  if (book <= 0) return positions
+
+  for (const p of positions) {
+    p.weight = (p.value ?? 0) / book
+    p.risk_share = p.risk_remaining === null ? null : Math.max(p.risk_remaining, 0) / book
+  }
+
+  // Recomputed rather than appended, so the risk sentences sit in the same
+  // priority order as everything else rather than always landing last.
+  for (const p of positions) p.insights = insightsFor(p, null, p.insights)
+  return positions
+}
+
 /** Ordered by what should worry you most, not by what is easiest to compute. */
-function insightsFor(v: PositionView, setup: any): PositionView['insights'] {
-  const out: PositionView['insights'] = []
+const RISK_UNIT_LIMIT = 0.02
+
+function insightsFor(
+  v: PositionView,
+  setup: any,
+  existing?: PositionView['insights'],
+): PositionView['insights'] {
+  // On the second pass the position-level sentences are already written; only
+  // the book-level ones are missing, and re-deriving the first set would need
+  // the setup row again.
+  const out: PositionView['insights'] = existing
+    ? existing.filter((i) => i.text !== 'Nothing needs attention today.')
+    : []
+
+  if (v.risk_share !== null && v.risk_share > RISK_UNIT_LIMIT) {
+    out.push({
+      tone: 'warn',
+      text: `${(v.risk_share * 100).toFixed(1)}% of the book is at stake between here and this stop — a risk unit is normally 1%.`,
+    })
+  }
+  if (existing) {
+    if (!out.length) out.push({ tone: 'good', text: 'Nothing needs attention today.' })
+    return out
+  }
 
   if (v.failed_gates.length) {
     out.push({

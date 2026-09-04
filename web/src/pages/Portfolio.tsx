@@ -152,12 +152,14 @@ export function Portfolio() {
                 </div>
 
                 <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-5">
-                  <Cell label="Close" value={p.close?.toFixed(2) ?? '—'} />
+                  <Cell label="Close" value={p.close?.toFixed(2) ?? '—'}
+                        hint={p.weight === null ? undefined : `${(p.weight * 100).toFixed(0)}% weight`} />
                   <Cell label="P&L" value={p.pnl === null ? '—' : `₹${p.pnl.toLocaleString('en-IN', {maximumFractionDigits: 0})}`} />
                   <Cell label="Stop" value={p.stop_price?.toFixed(2) ?? '—'}
                         hint={p.stop_distance_pct === null ? undefined : `${pct(p.stop_distance_pct, 0)} away`} />
                   <Cell label="Still at risk"
-                        value={p.risk_remaining === null ? '—' : `₹${Math.max(p.risk_remaining, 0).toLocaleString('en-IN', {maximumFractionDigits: 0})}`} />
+                        value={p.risk_remaining === null ? '—' : `₹${Math.max(p.risk_remaining, 0).toLocaleString('en-IN', {maximumFractionDigits: 0})}`}
+                        hint={p.risk_share === null ? undefined : `${(p.risk_share * 100).toFixed(1)}% of the book`} />
                   <Cell label="Score" value={p.blended?.toFixed(0) ?? '—'}
                         hint={p.decile === null ? undefined : `decile ${p.decile}`} />
                 </dl>
