@@ -85,6 +85,11 @@ function toScreenerRow(r: Record<string, any>): ScreenerRow {
     stop_price: r.stop_price ?? null,
     target_price: r.target_price ?? null,
     reward_risk: r.reward_risk ?? null,
+    resistance_floor: null,
+    resistance_ceil: null,
+    resistance_strength: null,
+    false_breakout: null,
+    rejected_at_resistance: false,
     headroom: null,
     zone_floor: null,
     zone_ceil: null,
@@ -203,11 +208,13 @@ const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v))
 function toZone(z: Record<string, any>): Zone {
   return {
     timeframe: z.timeframe,
+    kind: z.kind ?? 'support',
     source: z.source,
     floor: Number(z.floor_price),
     ceil: Number(z.ceil_price),
     touches: Number(z.touch_count ?? 0),
     strength: z.strength === null ? null : Number(z.strength),
+    respect: z.respect === null || z.respect === undefined ? null : Number(z.respect),
     formed_on: z.formed_on ?? null,
     invalidated_on: z.invalidated_on ?? null,
   }
@@ -251,7 +258,7 @@ export async function loadPortfolio(): Promise<{
           .order('date', { ascending: false }),
         supabase.from('prices_daily').select('symbol,date,adj_close').in('symbol', symbols)
           .order('date', { ascending: false }).limit(symbols.length * 5),
-        supabase.from('ts_setups').select('symbol,zone_floor,zone_ceil,setup_status')
+        supabase.from('ts_setups').select('*')
           .in('symbol', symbols).order('date', { ascending: false }),
       ])
 
@@ -379,4 +386,40 @@ function insightsFor(v: PositionView, setup: any): PositionView['insights'] {
     out.push({ tone: 'good', text: 'Nothing needs attention today.' })
   }
   return out
+}
+
+
+/** The overhead read for one symbol: nearest resistance and how price behaved at it. */
+export interface Overhead {
+  floor: number | null
+  ceil: number | null
+  strength: number | null
+  false_breakout: {
+    broke_on: string
+    bars_held: number
+    peak: number
+    back_below: number
+  } | null
+  rejected: boolean
+}
+
+export async function loadOverhead(symbol: string): Promise<Overhead | null> {
+  if (!supabase) return null
+  const { data, error } = await supabase
+    .from('ts_setups')
+    .select('resistance_floor,resistance_ceil,resistance_strength,false_breakout,rejected_at_resistance')
+    .eq('symbol', symbol)
+    .order('date', { ascending: false })
+    .limit(1)
+  if (error || !data?.length) return null
+
+  const r = data[0] as Record<string, any>
+  if (r.resistance_floor === null) return null
+  return {
+    floor: Number(r.resistance_floor),
+    ceil: r.resistance_ceil === null ? null : Number(r.resistance_ceil),
+    strength: r.resistance_strength === null ? null : Number(r.resistance_strength),
+    false_breakout: r.false_breakout ?? null,
+    rejected: Boolean(r.rejected_at_resistance),
+  }
 }

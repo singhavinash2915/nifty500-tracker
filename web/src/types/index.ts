@@ -40,6 +40,17 @@ export interface ScreenerRow {
   confirmations: string[]
   caps: string[]
   reason: string | null
+  resistance_floor: number | null
+  resistance_ceil: number | null
+  resistance_strength: number | null
+  /** Set when price closed above resistance and then closed back under it. */
+  false_breakout: {
+    broke_on: string
+    bars_held: number
+    peak: number
+    back_below: number
+  } | null
+  rejected_at_resistance: boolean
 }
 
 export interface ScreenerSnapshot {
@@ -58,11 +69,14 @@ export interface Bars {
 
 export interface Zone {
   timeframe: 'daily' | 'weekly'
+  kind: 'support' | 'resistance'
   source: string
   floor: number
   ceil: number
   touches: number
   strength: number | null
+  /** Rejections as a share of decisive tests. Null when never decisively tested. */
+  respect: number | null
   formed_on: string | null
   invalidated_on: string | null
 }

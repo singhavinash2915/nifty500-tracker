@@ -27,13 +27,21 @@ from enum import Enum
 import numpy as np
 import pandas as pd
 
-from .pivots import Pivot, PivotKind, find_pivots, fractal_lows, support_pivots
+from .pivots import (
+    Pivot, PivotKind, find_pivots, fractal_highs, fractal_lows,
+    resistance_pivots, support_pivots,
+)
 
 
 class ZoneSource(str, Enum):
     PIVOT = "pivot"
     CLUSTER = "cluster"
     VOLUME_SHELF = "volume_shelf"
+
+
+class ZoneKind(str, Enum):
+    SUPPORT = "support"
+    RESISTANCE = "resistance"
 
 
 # How far apart two pivot lows may sit and still be the same zone, in ATR.
@@ -73,6 +81,7 @@ class Zone:
     ceil: float
     formed_index: int
     formed_date: pd.Timestamp
+    kind: ZoneKind = ZoneKind.SUPPORT
     events: list[ZoneEvent] = field(default_factory=list)
     invalidated_index: int | None = None
     invalidated_date: pd.Timestamp | None = None
@@ -94,6 +103,25 @@ class Zone:
     @property
     def rejections(self) -> list[ZoneEvent]:
         return [e for e in self.events if e.kind == "rejection"]
+
+    @property
+    def breaks(self) -> list[ZoneEvent]:
+        return [e for e in self.events if e.kind == "break"]
+
+    @property
+    def respect(self) -> float | None:
+        """Rejections as a share of every decisive test.
+
+        Borrowed from the TradingView script's bounces/(bounces+breaks): a
+        level tested five times and held five times is a different proposition
+        from one tested five times and broken twice, even though both show
+        five touches. Counting only touches flatters the second.
+        """
+        decisive = len(self.rejections) + len(self.breaks)
+        return len(self.rejections) / decisive if decisive else None
+
+    def is_resistance(self) -> bool:
+        return self.kind is ZoneKind.RESISTANCE
 
     def is_live(self, at_index: int) -> bool:
         if self.formed_index > at_index:
@@ -141,6 +169,30 @@ def _atr_at(atr: pd.Series, index: int) -> float | None:
         return None
     value = atr.iloc[index]
     return None if pd.isna(value) else float(value)
+
+
+def cluster_resistances(
+    pivots: list[Pivot], atr: pd.Series, *, tolerance: float = CLUSTER_TOLERANCE_ATR
+) -> list[list[Pivot]]:
+    """The mirror of `cluster_supports`, anchored to the cluster's ceiling.
+
+    Anchoring to the highest member rather than the last bounds the band the
+    same way and for the same reason — chaining off the last addition walks a
+    zone across the chart.
+    """
+    highs = sorted(resistance_pivots(pivots), key=lambda p: p.price, reverse=True)
+    clusters: list[list[Pivot]] = []
+
+    for pivot in highs:
+        local_atr = _atr_at(atr, pivot.index)
+        if local_atr is None or local_atr <= 0:
+            continue
+        if clusters and abs(pivot.price - clusters[-1][0].price) <= tolerance * local_atr:
+            clusters[-1].append(pivot)
+        else:
+            clusters.append([pivot])
+
+    return clusters
 
 
 def zone_from_cluster(cluster: list[Pivot], atr: pd.Series) -> Zone | None:
@@ -234,7 +286,15 @@ def volume_shelves(
 def annotate_events(
     zone: Zone, frame: pd.DataFrame, atr: pd.Series, *, timeframe: str
 ) -> Zone:
-    """Walk the bars after formation, recording touches, rejections and breaks."""
+    """Walk the bars after formation, recording touches, rejections and breaks.
+
+    Mirrored for resistance. A support zone is approached from above and broken
+    by a close beneath it; a resistance zone is approached from below and broken
+    by a close above. The reaction that matters is likewise inverted — a bounce
+    down off resistance is the equivalent of a bounce up off support.
+    """
+    if zone.is_resistance():
+        return _annotate_resistance(zone, frame, atr, timeframe=timeframe)
     highs = frame["high"].to_numpy(dtype="float64")
     lows = frame["low"].to_numpy(dtype="float64")
     closes = frame["close"].to_numpy(dtype="float64")
@@ -287,6 +347,61 @@ def annotate_events(
     return zone
 
 
+def _annotate_resistance(
+    zone: Zone, frame: pd.DataFrame, atr: pd.Series, *, timeframe: str
+) -> Zone:
+    highs = frame["high"].to_numpy(dtype="float64")
+    lows = frame["low"].to_numpy(dtype="float64")
+    closes = frame["close"].to_numpy(dtype="float64")
+    volumes = frame["volume"].to_numpy(dtype="float64") if "volume" in frame else None
+    dates = frame.index
+
+    window = REACTION_WINDOW.get(timeframe, 20)
+    spacing = MIN_BARS_BETWEEN_TOUCHES.get(timeframe, 5)
+
+    last_touch = -10**9
+    broken_at: int | None = None
+
+    for i in range(zone.formed_index + 1, len(frame)):
+        local_atr = _atr_at(atr, i) or zone.width or 1.0
+
+        if broken_at is None and closes[i] > zone.ceil + BREAK_BUFFER_ATR * local_atr:
+            zone.events.append(ZoneEvent(i, dates[i], "break"))
+            zone.invalidated_index, zone.invalidated_date = i, dates[i]
+            broken_at = i
+            continue
+
+        if broken_at is not None:
+            if closes[i] < zone.floor:
+                zone.events.append(ZoneEvent(i, dates[i], "reclaim"))
+                broken_at = None
+            continue
+
+        entered = highs[i] >= zone.floor
+        if not entered or i - last_touch < spacing:
+            continue
+        last_touch = i
+
+        stop = min(i + window + 1, len(frame))
+        # The reaction is downward: how far price fell away from the band.
+        reaction = (zone.floor - lows[i + 1 : stop].min()) / local_atr if stop > i + 1 else 0.0
+
+        ratio = None
+        if volumes is not None and i >= 20:
+            recent = np.nanmean(volumes[max(0, i - 19) : i + 1])
+            base = np.nanmean(volumes[max(0, i - 99) : i + 1])
+            if base and np.isfinite(base) and base > 0:
+                ratio = float(recent / base)
+
+        # A wick into the band that closes back below it is a rejection.
+        kind = "rejection" if closes[i] < zone.floor else "touch"
+        zone.events.append(
+            ZoneEvent(i, dates[i], kind, reaction_atr=float(reaction), volume_ratio=ratio)
+        )
+
+    return zone
+
+
 def rate_strength(zone: Zone, *, at_index: int, timeframe: str) -> float:
     """0-100, from what the zone has done rather than how it was drawn."""
     touches = [e for e in zone.touches if e.index <= at_index]
@@ -311,6 +426,11 @@ def rate_strength(zone: Zone, *, at_index: int, timeframe: str) -> float:
 
     quality = (len(rejections) / count * 100.0) if count else 40.0
 
+    # How often a decisive test went the level's way. A zone broken twice out
+    # of five tests is weaker than the touch count alone suggests.
+    respect = zone.respect
+    respect_score = 50.0 if respect is None else respect * 100.0
+
     volumes = [e.volume_ratio for e in touches if e.volume_ratio is not None]
     volume_score = float(np.clip((np.mean(volumes) - 0.7) / 0.8 * 100.0, 0, 100)) if volumes else 50.0
 
@@ -319,11 +439,12 @@ def rate_strength(zone: Zone, *, at_index: int, timeframe: str) -> float:
     age_score = float(np.clip(100.0 * (1.0 - max(age - fade, 0) / fade), 20, 100))
 
     strength = (
-        touch_score * 0.32
-        + reaction_score * 0.24
-        + quality * 0.18
-        + volume_score * 0.13
-        + age_score * 0.13
+        touch_score * 0.28
+        + reaction_score * 0.20
+        + quality * 0.14
+        + respect_score * 0.14
+        + volume_score * 0.12
+        + age_score * 0.12
     )
     # Weekly structure is more durable than daily; the plan weights it roughly
     # double, applied here as a bounded uplift rather than a raw multiplier.
@@ -343,17 +464,24 @@ def build_zones(
 
     # Both sources feed clustering: SPL says which lows the current structure
     # is built on, fractals give the dense coverage a two-year scan needs.
-    pivots = find_pivots(frame) + fractal_lows(frame)
+    structural = find_pivots(frame)
+    pivots = structural + fractal_lows(frame)
+    highs = structural + fractal_highs(frame)
     zones: list[Zone] = []
 
-    for cluster in cluster_supports(pivots, atr):
-        zone = zone_from_cluster(cluster, atr)
-        if zone is None or zone.formed_index > at_index:
-            continue
-        zone.timeframe = timeframe
-        annotate_events(zone, frame, atr, timeframe=timeframe)
-        zone.strength = rate_strength(zone, at_index=at_index, timeframe=timeframe)
-        zones.append(zone)
+    for kind, clusters in (
+        (ZoneKind.SUPPORT, cluster_supports(pivots, atr)),
+        (ZoneKind.RESISTANCE, cluster_resistances(highs, atr)),
+    ):
+        for cluster in clusters:
+            zone = zone_from_cluster(cluster, atr)
+            if zone is None or zone.formed_index > at_index:
+                continue
+            zone.timeframe = timeframe
+            zone.kind = kind
+            annotate_events(zone, frame, atr, timeframe=timeframe)
+            zone.strength = rate_strength(zone, at_index=at_index, timeframe=timeframe)
+            zones.append(zone)
 
     price = float(frame["close"].iloc[at_index])
     shelf_lookback = 500
@@ -382,6 +510,18 @@ def build_zones(
 
 
 def live_zones_below(zones: list[Zone], price: float, *, at_index: int) -> list[Zone]:
-    """Zones still intact and not above the current price, nearest first."""
-    below = [z for z in zones if z.is_live(at_index) and z.floor <= price]
+    """Support zones still intact and not above the current price, nearest first."""
+    below = [
+        z for z in zones
+        if z.is_live(at_index) and not z.is_resistance() and z.floor <= price
+    ]
     return sorted(below, key=lambda z: price - z.mid)
+
+
+def live_zones_above(zones: list[Zone], price: float, *, at_index: int) -> list[Zone]:
+    """Resistance zones still intact and not below the price, nearest first."""
+    above = [
+        z for z in zones
+        if z.is_live(at_index) and z.is_resistance() and z.ceil >= price
+    ]
+    return sorted(above, key=lambda z: z.mid - price)

@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import type { Bars, Zone } from '../types'
-import { useSeries } from '../lib/palette'
+import { useLevels } from '../lib/palette'
 import { shortDate } from '../lib/format'
 
 /**
@@ -24,10 +24,17 @@ import { shortDate } from '../lib/format'
 
 const MAX_LIVE_ZONES = 3
 const MAX_BROKEN_ZONES = 2
+const MAX_RESISTANCE_ZONES = 2
 
 function selectZones(zones: Zone[], price: number, firstDate: string): Zone[] {
+  // Nearest live resistance overhead: where the next attempt has to get through.
+  const overhead = zones
+    .filter((z) => !z.invalidated_on && z.kind === 'resistance' && z.ceil >= price)
+    .sort((a, b) => (a.floor + a.ceil) / 2 - (b.floor + b.ceil) / 2)
+    .slice(0, MAX_RESISTANCE_ZONES)
+
   const live = zones
-    .filter((z) => !z.invalidated_on && z.floor <= price)
+    .filter((z) => !z.invalidated_on && z.kind !== 'resistance' && z.floor <= price)
     .sort((a, b) => price - (a.floor + a.ceil) / 2 - (price - (b.floor + b.ceil) / 2))
     .slice(0, MAX_LIVE_ZONES)
 
@@ -45,7 +52,7 @@ function selectZones(zones: Zone[], price: number, firstDate: string): Zone[] {
     .sort((a, b) => String(b.invalidated_on).localeCompare(String(a.invalidated_on)))
     .slice(0, MAX_BROKEN_ZONES)
 
-  return [...broken, ...live]
+  return [...broken, ...live, ...overhead]
 }
 export function PriceChart({
   bars,
@@ -58,7 +65,7 @@ export function PriceChart({
   zones: Zone[]
   dark: boolean
 }) {
-  const series = useSeries(dark)
+  const levels = useLevels(dark)
   const [hover, setHover] = useState<number | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
 
@@ -175,6 +182,10 @@ export function PriceChart({
           const yTop = model.y(z.ceil)
           const yBot = model.y(z.floor)
           const broken = Boolean(z.invalidated_on)
+          const resistance = z.kind === 'resistance'
+          // Slot 7 (red) for supply, slot 3 (aqua) for demand — the two are
+          // opposite claims about the same chart and must not share a colour.
+          const tone = resistance ? levels.resistance : levels.support
           return (
             <g key={k}>
               <rect
@@ -182,7 +193,7 @@ export function PriceChart({
                 y={Math.min(yTop, yBot)}
                 width={W - pad.l - pad.r}
                 height={Math.max(Math.abs(yBot - yTop), 1.5)}
-                fill={broken ? 'url(#broken)' : series[2]}
+                fill={broken ? 'url(#broken)' : tone}
                 opacity={broken ? 0.4 : 0.1}
               />
               {!broken && (
@@ -190,13 +201,18 @@ export function PriceChart({
                   {/* The floor is the line a stop sits under, so it is drawn
                       solid; the ceiling is dashed because entering the band is
                       gradual where losing it is decisive. */}
+                  {/* The decisive edge is drawn solid: the floor of a support
+                      zone is where a stop sits, the ceiling of a resistance
+                      zone is what a breakout has to clear. */}
                   <line
-                    x1={pad.l} x2={W - pad.r} y1={yBot} y2={yBot}
-                    stroke={series[2]} strokeWidth="1.75"
+                    x1={pad.l} x2={W - pad.r}
+                    y1={resistance ? yTop : yBot} y2={resistance ? yTop : yBot}
+                    stroke={tone} strokeWidth="1.75"
                   />
                   <line
-                    x1={pad.l} x2={W - pad.r} y1={yTop} y2={yTop}
-                    stroke={series[2]} strokeWidth="1" strokeDasharray="4 3" opacity="0.7"
+                    x1={pad.l} x2={W - pad.r}
+                    y1={resistance ? yBot : yTop} y2={resistance ? yBot : yTop}
+                    stroke={tone} strokeWidth="1" strokeDasharray="4 3" opacity="0.7"
                   />
                 </>
               )}
@@ -205,10 +221,10 @@ export function PriceChart({
         })}
 
         {overlays.sma200 && (
-          <path d={model.path(overlays.sma200)} fill="none" stroke={series[3]} strokeWidth="2" opacity="0.9" />
+          <path d={model.path(overlays.sma200)} fill="none" stroke={levels.sma200} strokeWidth="2" opacity="0.9" />
         )}
         {overlays.sma50 && (
-          <path d={model.path(overlays.sma50)} fill="none" stroke={series[1]} strokeWidth="2" opacity="0.9" />
+          <path d={model.path(overlays.sma50)} fill="none" stroke={levels.sma50} strokeWidth="2" opacity="0.9" />
         )}
         <path d={model.path(bars.c)} fill="none" stroke={priceInk} strokeWidth="2" />
 
@@ -255,9 +271,10 @@ export function PriceChart({
 
       <figcaption className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
         <LegendSwatch color={priceInk} label="Adjusted close" />
-        <LegendSwatch color={series[1]} label="50DMA" />
-        <LegendSwatch color={series[3]} label="200DMA" />
-        <LegendSwatch color={series[2]} label="Live support zone" />
+        <LegendSwatch color={levels.sma50} label="50DMA" />
+        <LegendSwatch color={levels.sma200} label="200DMA" />
+        <LegendSwatch color={levels.support} label="Support" />
+        <LegendSwatch color={levels.resistance} label="Resistance" />
         <span className="inline-flex items-center gap-1.5">
           <span
             className="inline-block h-2.5 w-4 rounded-[1px] opacity-60"

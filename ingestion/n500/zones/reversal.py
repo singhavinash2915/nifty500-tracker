@@ -217,3 +217,78 @@ def stabilised(frame: pd.DataFrame, index: int) -> bool:
     prev_l = float(frame["low"].iloc[index - 1])
     prev_c = float(frame["close"].iloc[index - 1])
     return (h <= prev_h and l >= prev_l) or c > prev_c
+
+
+# --- resistance behaviour -------------------------------------------------
+
+# How long a breakout has to hold before it stops being suspect.
+FALSE_BREAKOUT_WINDOW = {"daily": 5, "weekly": 3}
+
+
+def false_breakout(
+    frame: pd.DataFrame,
+    index: int,
+    *,
+    ceil: float,
+    timeframe: str = "daily",
+) -> dict | None:
+    """A close above resistance that did not hold.
+
+    The pattern that punishes breakout buyers: price closes through the band,
+    everyone who was waiting for confirmation gets in, and then it closes back
+    underneath within a few bars. The failure is more informative than the
+    breakout was — a level that rejected a genuine attempt is stronger
+    afterwards, not weaker, and the trapped buyers above become supply.
+
+    Returns the detail of the most recent one inside the window, or None.
+    """
+    window = FALSE_BREAKOUT_WINDOW.get(timeframe, 5)
+    if index < window + 1:
+        return None
+
+    closes = frame["close"]
+    highs = frame["high"]
+    if float(closes.iloc[index]) >= ceil:
+        return None      # still above; nothing has failed yet
+
+    for back in range(1, window + 1):
+        at = index - back
+        if at < 1:
+            break
+        if float(closes.iloc[at]) > ceil:
+            return {
+                "broke_on": str(frame.index[at].date()),
+                "bars_held": back,
+                "peak": round(float(highs.iloc[at : index + 1].max()), 4),
+                "back_below": round(float(closes.iloc[index]), 4),
+            }
+    return None
+
+
+def rejected_at_resistance(
+    frame: pd.DataFrame, index: int, *, floor: float, ceil: float
+) -> bool:
+    """A bearish candle that reached into resistance and closed back below.
+
+    The mirror of `bullish_candle`: a shooting star or bearish engulfing where
+    a support setup would look for a hammer.
+    """
+    if index < 1:
+        return False
+
+    o, h, l, c = (float(frame[k].iloc[index]) for k in ("open", "high", "low", "close"))
+    prev_o = float(frame["open"].iloc[index - 1])
+    prev_c = float(frame["close"].iloc[index - 1])
+
+    if h < floor:
+        return False
+
+    body = abs(c - o)
+    upper_wick = h - max(o, c)
+    span = h - l
+    if span <= 0:
+        return False
+
+    star = upper_wick > HAMMER_WICK_RATIO * max(body, span * 0.05) and c < (l + 0.5 * span)
+    engulfing = prev_c > prev_o and c < o and c <= prev_o and o >= prev_c
+    return bool((star or engulfing) and c < ceil)

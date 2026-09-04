@@ -5,7 +5,7 @@ import type { ScreenerRow, StockDetail as Detail } from '../types'
 import { PriceChart } from '../components/PriceChart'
 import { ShareholdingTrend, TrendBars } from '../components/Charts'
 import { crore, num, pct } from '../lib/format'
-import { loadDetail } from '../lib/load'
+import { loadDetail, loadOverhead, type Overhead } from '../lib/load'
 import { useDarkMode } from '../lib/palette'
 
 const CONFIRMATION_LABELS: Record<string, string> = {
@@ -28,6 +28,7 @@ export function StockDetail({ rows }: { rows: ScreenerRow[] }) {
   const { symbol = '' } = useParams()
   const [detail, setDetail] = useState<Detail | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [overhead, setOverhead] = useState<Overhead | null>(null)
   const dark = useDarkMode()
 
   const row = rows.find((r) => r.symbol === symbol)
@@ -41,6 +42,7 @@ export function StockDetail({ rows }: { rows: ScreenerRow[] }) {
       if (d) setDetail(d)
       else setError('No detail data published for this symbol yet.')
     })
+    loadOverhead(symbol).then((o) => !cancelled && setOverhead(o))
     return () => {
       cancelled = true
     }
@@ -138,8 +140,51 @@ export function StockDetail({ rows }: { rows: ScreenerRow[] }) {
         </section>
       )}
 
-      <Panel title="Price, moving averages and support zones"
-             note={detail ? `${liveZones.length} live, ${detail.zones.length - liveZones.length} broken — nearest shown` : undefined}>
+      {overhead && (
+        <section className={`mb-6 rounded-md border p-4 ${
+          overhead.false_breakout
+            ? 'border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40'
+            : 'border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900'
+        }`}>
+          <h2 className="font-mono text-[11px] uppercase tracking-wider text-slate-500">
+            Overhead
+          </h2>
+          <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
+            <Field
+              label="Next resistance"
+              value={overhead.floor ? `${num(overhead.floor)}–${num(overhead.ceil)}` : '—'}
+            />
+            <Field label="Strength" value={overhead.strength?.toFixed(0) ?? '—'} />
+            <Field
+              label="Room to it"
+              value={
+                overhead.floor && row.close
+                  ? pct(overhead.floor / row.close - 1, 1)
+                  : '—'
+              }
+            />
+            <Field
+              label="Rejected today"
+              value={overhead.rejected ? 'yes' : 'no'}
+            />
+          </dl>
+
+          {overhead.false_breakout && (
+            <p className="mt-3 text-sm text-amber-900 dark:text-amber-200">
+              <strong>Failed breakout.</strong> Closed above this level on{' '}
+              <span className="font-mono">{overhead.false_breakout.broke_on}</span>, held{' '}
+              {overhead.false_breakout.bars_held}{' '}
+              {overhead.false_breakout.bars_held === 1 ? 'session' : 'sessions'}, peaked at{' '}
+              <span className="font-mono">{num(overhead.false_breakout.peak)}</span> and is
+              back under it. Buyers who chased the break are now offside, and that supply
+              sits between here and any further upside.
+            </p>
+          )}
+        </section>
+      )}
+
+      <Panel title="Price, moving averages and zones"
+             note={detail ? `${liveZones.filter((z) => z.kind !== 'resistance').length} support, ${liveZones.filter((z) => z.kind === 'resistance').length} resistance live — nearest shown` : undefined}>
         {error && <p className="py-6 text-sm text-slate-500">{error}</p>}
         {!detail && !error && <p className="py-6 text-sm text-slate-500">Loading…</p>}
         {detail && (

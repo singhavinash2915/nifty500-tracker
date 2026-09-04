@@ -22,7 +22,7 @@ from .. import indicators as ind
 from ..db import Db, run
 from ..scoring import support
 from ..zones import reversal
-from ..zones.build import build_zones
+from ..zones.build import build_zones, live_zones_above
 from ..zones.pivots import find_pivots
 from .compute_technicals import MIN_BARS, adjusted_frame
 
@@ -177,6 +177,11 @@ def main(argv: list[str] | None = None) -> int:
                             ),
                             "confluence": zone.confluence,
                             "strength": zone.strength,
+                            "kind": zone.kind.value,
+                            "break_count": len(zone.breaks),
+                            "respect": (
+                                None if zone.respect is None else round(zone.respect, 3)
+                            ),
                             "invalidated_on": (
                                 zone.invalidated_date.date().isoformat()
                                 if zone.invalidated_date is not None
@@ -185,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
                         }
                     )
 
+            overhead = _overhead(daily, zones["daily"], setup)
             setup_rows.append(
                 {
                     "symbol": symbol,
@@ -204,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
                     "zone_floor": setup.zone.floor if setup.zone else None,
                     "zone_ceil": setup.zone.ceil if setup.zone else None,
                     "zone_timeframe": setup.zone.timeframe if setup.zone else None,
+                    **overhead,
                 }
             )
             log.symbols_ok += 1
@@ -225,6 +232,32 @@ def main(argv: list[str] | None = None) -> int:
     mode = "dry run" if db.dry_run else "Supabase"
     print(f"[{JOB}] {summary} ({mode})")
     return 0
+
+
+def _overhead(daily: pd.DataFrame, zones: list, setup) -> dict:
+    """The nearest live resistance, and whether price has just failed at it.
+
+    Reported for every symbol, not only those with a support setup — "stalling
+    under a level it has already failed once" is worth seeing on its own.
+    """
+    index = len(daily) - 1
+    price = float(daily["close"].iloc[index])
+    above = live_zones_above(zones, price, at_index=index)
+    if not above:
+        return {}
+
+    zone = above[0]
+    return {
+        "resistance_floor": round(zone.floor, 4),
+        "resistance_ceil": round(zone.ceil, 4),
+        "resistance_strength": zone.strength,
+        "false_breakout": reversal.false_breakout(
+            daily, index, ceil=zone.ceil, timeframe="daily"
+        ),
+        "rejected_at_resistance": reversal.rejected_at_resistance(
+            daily, index, floor=zone.floor, ceil=zone.ceil
+        ),
+    }
 
 
 def _mean_reaction(zone) -> float | None:

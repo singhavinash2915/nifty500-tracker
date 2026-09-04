@@ -16,6 +16,27 @@ export const SERIES = {
   dark: ['#3987e5', '#d95926', '#199e70', '#c98500'],
 } as const
 
+/**
+ * The price chart's four marks, named rather than borrowed from the generic
+ * slots. They are not interchangeable series: two moving averages, a demand
+ * band and a supply band, and mistaking one for another is the whole failure
+ * mode of the chart.
+ *
+ * Chosen after the validator failed the previous assignment. The two moving
+ * averages had been orange and yellow — ΔE 13.7 in light and 10.6 in dark,
+ * below the 15 floor, so they were genuinely hard to tell apart for anyone.
+ * Validated as a set in both modes: `validate_palette.js
+ * "#2a78d6,#eb6834,#1baf7a,#e34948"`.
+ */
+export const LEVELS = {
+  light: { sma50: '#2a78d6', sma200: '#eb6834', support: '#1baf7a', resistance: '#e34948' },
+  dark:  { sma50: '#3987e5', sma200: '#d95926', support: '#199e70', resistance: '#e66767' },
+} as const
+
+export function useLevels(dark: boolean) {
+  return dark ? LEVELS.dark : LEVELS.light
+}
+
 /** Reserved for state, never reused as "series 5". */
 export const STATUS = {
   good: { light: '#1baf7a', dark: '#199e70' },
