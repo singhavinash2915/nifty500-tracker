@@ -57,6 +57,34 @@ PAGE_ORDER = {
 }
 
 
+def seek_filter(order_by: tuple[str, ...], cursor: dict[str, Any]) -> str:
+    """The PostgREST `or` expression for "sorted strictly after `cursor`".
+
+    Keyset paging, written out longhand because PostgREST has no row-value
+    comparison. For a key of (a, b, c) the condition is
+
+        a > A  or  (a = A and b > B)  or  (a = A and b = B and c > C)
+
+    which is the lexicographic ordering the query is already sorted by. Any
+    number of columns works, which matters because the keys in PAGE_ORDER run
+    from one column to three.
+    """
+    clauses = []
+    for depth, column in enumerate(order_by):
+        equals = [f"{c}.eq.{cursor[c]}" for c in order_by[:depth]]
+        greater = f"{column}.gt.{cursor[column]}"
+        clauses.append(f"and({','.join([*equals, greater])})" if equals else greater)
+    return ",".join(clauses)
+
+
+def _seek_past(query, order_by: tuple[str, ...], cursor: dict[str, Any]):
+    """Restrict a query to rows sorted after `cursor`."""
+    if len(order_by) == 1:
+        column = order_by[0]
+        return query.gt(column, cursor[column])
+    return query.or_(seek_filter(order_by, cursor))
+
+
 def _collapse_duplicates(
     rows: Sequence[dict[str, Any]], on_conflict: str
 ) -> list[dict[str, Any]]:
@@ -259,12 +287,16 @@ class Db:
         truncation is the worst shape a bug can take, so reads page until a
         short page proves the end.
 
-        `since` is a `(column, value)` pair applied as `>=`, and it is not an
-        optimisation so much as a limit on how far this pattern scales. Paging
-        the whole price table is 775 requests and the deep pages get slower as
-        the offset grows, because OFFSET makes the database walk everything it
-        is skipping; at three quarters of a million rows that started hitting
-        the statement timeout. A job that only wants recent bars should say so.
+        Paging is by key rather than by offset. OFFSET makes the database walk
+        every row it skips, so page 700 of the price table costs seven hundred
+        thousand rows of work to return a thousand — which is how
+        `export_snapshot` came to be the one step of ten that failed on a
+        statement timeout once the table passed three quarters of a million
+        rows. Seeking past the last key read is flat regardless of depth, and
+        `PAGE_ORDER` already guarantees the key is unique.
+
+        `since` is a `(column, value)` pair applied as `>=`. Still worth using
+        where a job only wants recent rows: fewer requests beats faster ones.
         """
         if self.dry_run:
             path = DRYRUN_DIR / f"{table}.json"
@@ -282,7 +314,8 @@ class Db:
             )
 
         rows: list[dict[str, Any]] = []
-        start = 0
+        cursor: dict[str, Any] | None = None
+
         while True:
             query = self._client.table(table).select(columns)
             for column, value in (where or {}).items():
@@ -291,11 +324,14 @@ class Db:
                 query = query.gte(since[0], since[1])
             for column in order_by:
                 query = query.order(column)
-            page = query.range(start, start + page_size - 1).execute().data
+            if cursor is not None:
+                query = _seek_past(query, order_by, cursor)
+
+            page = query.limit(page_size).execute().data
             rows.extend(page)
             if len(page) < page_size:
                 return rows
-            start += page_size
+            cursor = {column: page[-1][column] for column in order_by}
 
     # -- run audit ---------------------------------------------------
 

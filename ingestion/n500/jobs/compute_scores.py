@@ -45,7 +45,19 @@ def _num(value):
 
 
 def build_snapshot(technicals: pd.DataFrame, prices: pd.DataFrame, stocks: pd.DataFrame) -> pd.DataFrame:
-    """Latest technicals row per symbol, joined to its close and sector."""
+    """Latest technicals row per symbol, joined to its close and sector.
+
+    Current constituents only. The survivorship fix added 312 companies that
+    have left the index since 2018 — ALBK, ANDHRABANK, 8KMILES — so the
+    backtest could see the ones that failed rather than only the survivors.
+    They are marked inactive, and every job downstream of prices happily scored
+    them anyway: the first run after that change put 210 delisted names into
+    the screener and the buy list, offering positions in companies that are no
+    longer in the index and in some cases no longer exist.
+
+    Technicals and zones still compute for them, because the backtest needs
+    exactly that. Scoring is where the live universe begins.
+    """
     technicals = technicals.copy()
     technicals["date"] = pd.to_datetime(technicals["date"])
     latest = technicals.sort_values("date").groupby("symbol").tail(1).set_index("symbol")
@@ -60,10 +72,13 @@ def build_snapshot(technicals: pd.DataFrame, prices: pd.DataFrame, stocks: pd.Da
         .rename(columns={"adj_close": "close", "date": "price_date"})
     )
 
-    sectors = stocks.set_index("symbol")["sector"]
+    indexed = stocks.set_index("symbol")
+    active = indexed["is_active"].fillna(True).astype(bool) if "is_active" in indexed else None
 
     snapshot = latest.join(last_close, how="inner", rsuffix="_price")
-    snapshot["sector"] = sectors.reindex(snapshot.index)
+    snapshot["sector"] = indexed["sector"].reindex(snapshot.index)
+    if active is not None:
+        snapshot = snapshot[active.reindex(snapshot.index).fillna(False)]
 
     # A technicals row that is older than the price row means the technicals
     # job has not caught up; scoring on it would mix dates.

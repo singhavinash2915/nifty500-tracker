@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import time
 from dataclasses import dataclass, asdict
 from datetime import date, timedelta
 
@@ -69,15 +70,30 @@ class UniverseParseError(RuntimeError):
     """Raised when the CSV no longer looks like what we expect."""
 
 
-def fetch_csv(url: str = INDEX_CSV_URL) -> str:
-    response = httpx.get(
-        url,
-        headers={"User-Agent": settings.user_agent},
-        timeout=settings.request_timeout,
-        follow_redirects=True,
-    )
-    response.raise_for_status()
-    return response.text
+# One request against a public CSV, retried because a single read timeout at
+# 19:15 should not be the reason a whole night's data is missing. Backoff is
+# short: the file is 33KB and either the host answers or it does not.
+FETCH_ATTEMPTS = 3
+FETCH_BACKOFF_SECONDS = 5.0
+
+
+def fetch_csv(url: str = INDEX_CSV_URL, *, attempts: int = FETCH_ATTEMPTS) -> str:
+    last: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = httpx.get(
+                url,
+                headers={"User-Agent": settings.user_agent},
+                timeout=settings.request_timeout,
+                follow_redirects=True,
+            )
+            response.raise_for_status()
+            return response.text
+        except (httpx.HTTPError, httpx.StreamError) as exc:
+            last = exc
+            if attempt < attempts:
+                time.sleep(FETCH_BACKOFF_SECONDS * attempt)
+    raise last if last else RuntimeError("fetch failed with no exception")
 
 
 def parse_csv(text: str) -> list[Constituent]:

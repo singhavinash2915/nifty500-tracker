@@ -1,8 +1,10 @@
 """Parser assertions matter more than usual here: a silent layout change on
 NSE's side would otherwise write 500 rows of nulls into the universe table."""
 
+import httpx
 import pytest
 
+from n500.sources import universe
 from n500.sources.universe import UniverseParseError, parse_csv, week_start
 from datetime import date
 
@@ -161,16 +163,25 @@ def test_replace_discards_what_was_there_before(tmp_path, monkeypatch):
 def test_select_pages_past_the_row_cap(monkeypatch):
     """PostgREST applies max_rows to every request and returns the first page
     with no error. One unpaged read returned 1,000 of 310,414 price rows, and
-    every downstream job then reported success on a fiftieth of the data."""
+    every downstream job then reported success on a fiftieth of the data.
+
+    Paging is by key now rather than by offset — OFFSET makes the server walk
+    every row it skips, which put `export_snapshot` over the statement timeout
+    once the table passed three quarters of a million rows. The fake below
+    models a keyset server: it sorts, drops everything at or before the cursor,
+    and caps the result.
+    """
     from n500 import db as db_module
 
     total = 2500
-    served = [{"i": i} for i in range(total)]
+    served = [
+        {"symbol": f"SYM{i:04d}", "date": "2026-01-01", "i": i} for i in range(total)
+    ]
 
     class FakeQuery:
         def __init__(self):
-            self._start = 0
-            self._stop = None
+            self._after: str | None = None
+            self._limit = 10**9
 
         def select(self, *_a, **_k):
             return self
@@ -178,15 +189,31 @@ def test_select_pages_past_the_row_cap(monkeypatch):
         def eq(self, *_a):
             return self
 
+        def gte(self, *_a):
+            return self
+
         def order(self, *_a, **_k):
             return self
 
-        def range(self, start, stop):
-            self._start, self._stop = start, stop
+        def gt(self, _column, value):
+            self._after = value
+            return self
+
+        def or_(self, expression):
+            # "symbol.gt.SYM0999,and(symbol.eq...)" — only the leading bound
+            # matters here, since every row shares a date.
+            self._after = expression.split(",")[0].split(".gt.")[1]
+            return self
+
+        def limit(self, n):
+            self._limit = n
             return self
 
         def execute(self):
-            page = served[self._start : self._stop + 1][:1000]   # the server's cap
+            rows = sorted(served, key=lambda r: (r["symbol"], r["date"]))
+            if self._after is not None:
+                rows = [r for r in rows if r["symbol"] > self._after]
+            page = rows[: min(self._limit, 1000)]      # the server's own cap
             return type("R", (), {"data": page})()
 
     class FakeClient:
@@ -200,6 +227,7 @@ def test_select_pages_past_the_row_cap(monkeypatch):
     rows = database.select("prices_daily")
     assert len(rows) == total, "a short page is the only reliable end-of-data signal"
     assert rows[0]["i"] == 0 and rows[-1]["i"] == total - 1
+    assert len({r["i"] for r in rows}) == total, "keyset paging must not repeat a row"
 
 
 def test_upsert_collapses_duplicate_keys_within_a_batch():
@@ -246,3 +274,43 @@ def test_reading_an_unknown_table_fails_loudly(monkeypatch, tmp_path):
     database._client = None
     with pytest.raises(KeyError, match="stable page order"):
         database.select("some_new_table")
+
+
+class TestFetchRetries:
+    """A single read timeout should not be why a night's data is missing."""
+
+    def test_a_transient_failure_is_retried(self, monkeypatch):
+        calls = {"n": 0}
+
+        def flaky(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise httpx.ReadTimeout("timed out")
+            return httpx.Response(200, text="ok", request=httpx.Request("GET", "http://x"))
+
+        monkeypatch.setattr(universe.httpx, "get", flaky)
+        monkeypatch.setattr(universe.time, "sleep", lambda _: None)
+        assert universe.fetch_csv("http://x") == "ok"
+        assert calls["n"] == 3
+
+    def test_it_gives_up_after_the_last_attempt(self, monkeypatch):
+        def always_fails(*args, **kwargs):
+            raise httpx.ReadTimeout("timed out")
+
+        monkeypatch.setattr(universe.httpx, "get", always_fails)
+        monkeypatch.setattr(universe.time, "sleep", lambda _: None)
+        with pytest.raises(httpx.ReadTimeout):
+            universe.fetch_csv("http://x", attempts=2)
+
+    def test_a_bad_status_is_retried_too(self, monkeypatch):
+        calls = {"n": 0}
+
+        def server_error(*args, **kwargs):
+            calls["n"] += 1
+            return httpx.Response(503, request=httpx.Request("GET", "http://x"))
+
+        monkeypatch.setattr(universe.httpx, "get", server_error)
+        monkeypatch.setattr(universe.time, "sleep", lambda _: None)
+        with pytest.raises(httpx.HTTPStatusError):
+            universe.fetch_csv("http://x", attempts=3)
+        assert calls["n"] == 3

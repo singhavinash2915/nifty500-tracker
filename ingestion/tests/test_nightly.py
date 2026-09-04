@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from n500 import serialise
+from n500 import db, serialise
 from n500.jobs.run_nightly import Step, plan
 
 
@@ -86,3 +86,44 @@ def test_writing_produces_parseable_json(tmp_path):
 
     path = serialise.write(tmp_path / "out.json", {"n": float("nan"), "ok": [1, 2]})
     assert json.loads(path.read_text()) == {"n": None, "ok": [1, 2]}
+
+
+class TestKeysetPaging:
+    """Paging by key rather than by offset.
+
+    OFFSET makes the database walk every row it skips, so page 700 of the price
+    table costs seven hundred thousand rows of work to return a thousand. That
+    is how `export_snapshot` became the one step of ten that failed on a
+    statement timeout once the table passed three quarters of a million rows.
+    """
+
+    def test_a_single_column_key(self):
+        assert db.seek_filter(("symbol",), {"symbol": "ABB"}) == "symbol.gt.ABB"
+
+    def test_a_two_column_key_is_lexicographic(self):
+        got = db.seek_filter(("symbol", "date"), {"symbol": "ABB", "date": "2026-01-01"})
+        assert got == "symbol.gt.ABB,and(symbol.eq.ABB,date.gt.2026-01-01)"
+
+    def test_a_three_column_key_nests_one_level_further(self):
+        got = db.seek_filter(
+            ("index_name", "week_start", "symbol"),
+            {"index_name": "NIFTY500", "week_start": "2024-02-07", "symbol": "ABB"},
+        )
+        assert got == (
+            "index_name.gt.NIFTY500,"
+            "and(index_name.eq.NIFTY500,week_start.gt.2024-02-07),"
+            "and(index_name.eq.NIFTY500,week_start.eq.2024-02-07,symbol.gt.ABB)"
+        )
+
+    def test_every_key_in_page_order_can_be_expressed(self):
+        # A key the filter cannot express would page wrongly, and missing rows
+        # look exactly like a quiet day rather than a bug.
+        for table, key in db.PAGE_ORDER.items():
+            cursor = {column: "x" for column in key}
+            assert db.seek_filter(key, cursor), table
+
+    def test_the_clause_count_matches_the_key_length(self):
+        for length in (1, 2, 3, 4):
+            key = tuple(f"c{i}" for i in range(length))
+            got = db.seek_filter(key, {c: "v" for c in key})
+            assert got.count(".gt.") == length

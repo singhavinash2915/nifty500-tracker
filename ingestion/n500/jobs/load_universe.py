@@ -26,6 +26,10 @@ from ..sources.universe import (
 
 JOB = "load_universe"
 
+# Below this the stored universe is not a universe, and continuing would score
+# an empty index while reporting success.
+MIN_STORED_UNIVERSE = 400
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Load the Nifty 500 constituent list")
@@ -43,9 +47,46 @@ def main(argv: list[str] | None = None) -> int:
     with run(JOB, db=db) as log:
         try:
             constituents = fetch_constituents()
-        except (UniverseParseError, Exception) as exc:
-            log.error("*", f"fetch/parse failed: {exc}")
+        except UniverseParseError as exc:
+            # A layout change is not a network blip. The stored list is fine
+            # but the parser is now wrong about the world, and continuing would
+            # hide that until somebody noticed 500 rows of nulls.
+            log.error("*", f"parse failed: {exc}")
             raise
+        except Exception as exc:
+            # The constituent list changes twice a year at index rebalances,
+            # and yesterday's is almost certainly today's. Failing hard on a
+            # read timeout meant one unreachable 33KB CSV skipped prices,
+            # technicals, zones, scores, alerts — a whole night of data that had
+            # nothing to do with the file that failed. It happened at 19:29 on
+            # 4 September and cost the day.
+            #
+            # So a fetch failure is survivable *if* a usable universe is already
+            # stored. It is not survivable on a first run, where continuing
+            # would score an empty index and report success.
+            stored = [
+                r for r in db.select("stocks", "symbol,is_active")
+                if r.get("is_active", True)
+            ]
+            log.error("*", f"fetch failed: {exc}")
+            if len(stored) < MIN_STORED_UNIVERSE:
+                print(
+                    f"[{JOB}] fetch failed and only {len(stored)} symbols are stored "
+                    f"— refusing to continue on an empty universe",
+                    file=sys.stderr,
+                )
+                raise
+            log.notes = (
+                f"fetch failed ({type(exc).__name__}); continuing on the stored "
+                f"universe of {len(stored)} symbols"
+            )
+            print(
+                f"[{JOB}] could not reach the index CSV ({type(exc).__name__}). "
+                f"Using the {len(stored)} symbols already stored — the constituent "
+                f"list changes twice a year, so this is stale at worst.",
+                file=sys.stderr,
+            )
+            return 0
 
         # ETFs are tracked but are not index members, so they go into `stocks`
         # and never into `index_membership` — a backtest reconstructing the

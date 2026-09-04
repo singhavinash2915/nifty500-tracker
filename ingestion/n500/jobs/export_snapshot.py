@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -29,6 +30,14 @@ DETAIL_DIR = REPO_ROOT / "web" / "public" / "stocks"
 # same information, roughly a third of the bytes, and each file is fetched on
 # its own when a stock is opened.
 DETAIL_BARS = 520
+
+# The detail files show DETAIL_BARS and compute a 200-day average over the
+# window before them, so a little over three years of calendar time covers both
+# with room for holidays. Bounding the read is not a nicety: the price table
+# passed three quarters of a million rows once companies that left the index
+# were backfilled, and reading it whole put this job over the statement
+# timeout — the one step of ten that failed on the night it happened.
+DETAIL_WINDOW_DAYS = 1200
 
 
 def _clean(value):
@@ -57,8 +66,16 @@ def _num(value):
     return None if pd.isna(value) else round(float(value), 4)
 
 
+# `_latest` wants one row per symbol and was reading whole tables to get it —
+# 773,051 rows of technicals to keep 494. Two months is far more than the gap
+# any holiday or suspension can open in a nightly table, and an empty result
+# fails loudly a few lines below rather than silently.
+LATEST_WINDOW_DAYS = 60
+
+
 def _latest(db: Db, table: str, key: str = "date") -> pd.DataFrame:
-    frame = pd.DataFrame(db.select(table))
+    since = (date.today() - timedelta(days=LATEST_WINDOW_DAYS)).isoformat()
+    frame = pd.DataFrame(db.select(table, since=(key, since)))
     if frame.empty:
         return frame
     return frame.sort_values(key).groupby("symbol").tail(1).set_index("symbol")
@@ -75,7 +92,14 @@ def build(db: Db) -> dict:
     ratios = pd.DataFrame(db.select("company_ratios"))
     ratios = ratios.set_index("symbol") if not ratios.empty else pd.DataFrame()
 
-    prices = pd.DataFrame(db.select("prices_daily"))
+    # Only the latest close is wanted here; a fortnight covers any holiday gap.
+    prices = pd.DataFrame(
+        db.select(
+            "prices_daily",
+            columns="symbol,date,adj_close",
+            since=("date", (date.today() - timedelta(days=21)).isoformat()),
+        )
+    )
     last_close = {}
     if not prices.empty:
         prices["date"] = pd.to_datetime(prices["date"])
@@ -151,23 +175,37 @@ def serialise(snapshot: dict) -> str:
 
 def build_details(db: Db, symbols: set[str]) -> dict[str, dict]:
     """Per-symbol payloads for the stock detail page."""
-    prices = pd.DataFrame(db.select("prices_daily"))
-    if prices.empty:
-        return {}
-    prices["date"] = pd.to_datetime(prices["date"])
-    for column in ("open", "high", "low", "close", "adj_close", "volume"):
-        prices[column] = pd.to_numeric(prices[column], errors="coerce")
+    since = (date.today() - timedelta(days=DETAIL_WINDOW_DAYS)).isoformat()
 
-    technicals = pd.DataFrame(db.select("technicals_daily"))
-    if not technicals.empty:
-        technicals["date"] = pd.to_datetime(technicals["date"])
+    # Fetched per symbol rather than in one sweep. The sweep read every price
+    # row inside the window — around 600,000 once companies that left the index
+    # were backfilled — and no amount of paging makes that quick; this job was
+    # the only one of the ten that failed on a statement timeout. A query for
+    # one symbol goes straight down the (symbol, date) primary key and comes
+    # back with the seven hundred rows the file actually needs. It is 494
+    # requests instead of 600, and every one of them is small.
+    def prices_for(symbol: str) -> pd.DataFrame:
+        frame = pd.DataFrame(
+            db.select("prices_daily", where={"symbol": symbol}, since=("date", since))
+        )
+        if frame.empty:
+            return frame
+        frame["date"] = pd.to_datetime(frame["date"])
+        for column in ("open", "high", "low", "close", "adj_close", "volume"):
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        return frame
+
+    # No technicals read here. The overlays below are computed from the price
+    # series for the reasons given at their own comment, and this function used
+    # to fetch the whole technicals table anyway — six hundred thousand rows,
+    # parsed into a dataframe, assigned to a variable and never read. It was
+    # the entire reason this step timed out.
 
     zones = pd.DataFrame(db.select("support_zones"))
     annual = pd.DataFrame(db.select("fundamentals_y"))
     quarterly = pd.DataFrame(db.select("fundamentals_q"))
     holding = pd.DataFrame(db.select("shareholding"))
 
-    by_symbol = dict(tuple(prices.groupby("symbol")))
     zones_by = dict(tuple(zones.groupby("symbol"))) if not zones.empty else {}
     annual_by = dict(tuple(annual.groupby("symbol"))) if not annual.empty else {}
     quarterly_by = dict(tuple(quarterly.groupby("symbol"))) if not quarterly.empty else {}
@@ -175,10 +213,11 @@ def build_details(db: Db, symbols: set[str]) -> dict[str, dict]:
 
     out: dict[str, dict] = {}
     for symbol in sorted(symbols):
-        frame = by_symbol.get(symbol)
-        if frame is None or frame.empty:
+        history = prices_for(symbol)
+        if history.empty:
             continue
-        frame = frame.sort_values("date").tail(DETAIL_BARS)
+        history = history.sort_values("date")
+        frame = history.tail(DETAIL_BARS)
 
         # Split-adjusted, so the chart matches what the indicators were computed on.
         factor = (frame["adj_close"] / frame["close"]).fillna(1.0)
@@ -197,8 +236,7 @@ def build_details(db: Db, symbols: set[str]) -> dict[str, dict]:
         # empty overlay; and computing over the whole history means the 200DMA
         # has a value on the first bar of the visible window instead of 200
         # bars of nothing.
-        full = by_symbol[symbol].sort_values("date")
-        full_adjusted = full["adj_close"].astype("float64")
+        full_adjusted = history["adj_close"].astype("float64")
         window = full_adjusted.tail(DETAIL_BARS)
         overlays = {
             "sma50": [_num(v) for v in full_adjusted.rolling(50, min_periods=50).mean().loc[window.index]],
