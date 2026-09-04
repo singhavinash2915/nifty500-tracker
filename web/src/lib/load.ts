@@ -220,3 +220,163 @@ function rename(row: Record<string, any>, dateColumn: string): PeriodRecord {
   for (const [k, v] of Object.entries(rest)) out[k] = v === null ? null : Number(v)
   return out
 }
+
+
+/**
+ * Open holdings, marked to market and joined to what the screener thinks now.
+ *
+ * Read live rather than from the nightly export, because a holding added in the
+ * browser has to appear immediately — waiting until 19:15 to see something you
+ * just typed reads as a bug however well documented.
+ */
+export async function loadPortfolio(): Promise<{
+  positions: PositionView[]
+  source: 'supabase' | 'snapshot'
+}> {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('positions')
+        .select('*')
+        .is('exit_date', null)
+        .order('entry_date')
+      if (error) throw new Error(error.message)
+
+      const rows = data ?? []
+      if (!rows.length) return { positions: [], source: 'supabase' }
+
+      const symbols = [...new Set(rows.map((r) => r.symbol as string))]
+      const [scores, prices, setups] = await Promise.all([
+        supabase.from('scores_daily').select('*').in('symbol', symbols)
+          .order('date', { ascending: false }),
+        supabase.from('prices_daily').select('symbol,date,adj_close').in('symbol', symbols)
+          .order('date', { ascending: false }).limit(symbols.length * 5),
+        supabase.from('ts_setups').select('symbol,zone_floor,zone_ceil,setup_status')
+          .in('symbol', symbols).order('date', { ascending: false }),
+      ])
+
+      const firstBy = <T extends { symbol: string }>(list: T[] | null) => {
+        const out = new Map<string, T>()
+        for (const r of list ?? []) if (!out.has(r.symbol)) out.set(r.symbol, r)
+        return out
+      }
+      const score = firstBy(scores.data as any[])
+      const close = firstBy(prices.data as any[])
+      const setup = firstBy(setups.data as any[])
+
+      return {
+        positions: rows.map((p) =>
+          mark(p, Number(close.get(p.symbol)?.adj_close ?? NaN),
+               score.get(p.symbol), setup.get(p.symbol)),
+        ),
+        source: 'supabase',
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  const res = await fetch(`${import.meta.env.BASE_URL}positions.json`).catch(() => null)
+  if (!res?.ok) return { positions: [], source: 'snapshot' }
+  const file = await res.json()
+  return { positions: file.positions ?? [], source: 'snapshot' }
+}
+
+export interface PositionView {
+  id: number | null
+  symbol: string
+  entry_date: string | null
+  entry_price: number
+  quantity: number
+  stop_price: number | null
+  target_price: number | null
+  thesis: string | null
+  close: number | null
+  return_pct: number | null
+  pnl: number | null
+  value: number | null
+  stop_distance_pct: number | null
+  risk_remaining: number | null
+  to_target_pct: number | null
+  decile: number | null
+  blended: number | null
+  failed_gates: string[]
+  thesis_intact: boolean | null
+  zone_floor: number | null
+  /** Short sentences describing what needs attention, most urgent first. */
+  insights: { tone: 'bad' | 'warn' | 'good'; text: string }[]
+}
+
+function mark(p: any, close: number, score: any, setup: any): PositionView {
+  const entry = Number(p.entry_price)
+  const qty = Number(p.quantity)
+  const stop = p.stop_price === null ? null : Number(p.stop_price)
+  const target = p.target_price === null ? null : Number(p.target_price)
+  const has = Number.isFinite(close) && entry > 0
+
+  const failed = ((score?.flags ?? []) as any[])
+    .filter((f) => f?.verdict === 'fail')
+    .map((f) => String(f.name))
+  const decile = score?.decile ?? null
+  const view: PositionView = {
+    id: p.id ?? null,
+    symbol: p.symbol,
+    entry_date: p.entry_date ?? null,
+    entry_price: entry,
+    quantity: qty,
+    stop_price: stop,
+    target_price: target,
+    thesis: p.thesis ?? null,
+    close: has ? close : null,
+    return_pct: has ? close / entry - 1 : null,
+    pnl: has ? (close - entry) * qty : null,
+    value: has ? close * qty : null,
+    stop_distance_pct: has && stop ? close / stop - 1 : null,
+    risk_remaining: has && stop ? (close - stop) * qty : null,
+    to_target_pct: has && target ? target / close - 1 : null,
+    decile,
+    blended: score?.blended ?? null,
+    failed_gates: failed,
+    thesis_intact: score ? failed.length === 0 : null,
+    zone_floor: setup?.zone_floor ?? null,
+    insights: [],
+  }
+
+  view.insights = insightsFor(view, setup)
+  return view
+}
+
+/** Ordered by what should worry you most, not by what is easiest to compute. */
+function insightsFor(v: PositionView, setup: any): PositionView['insights'] {
+  const out: PositionView['insights'] = []
+
+  if (v.failed_gates.length) {
+    out.push({
+      tone: 'bad',
+      text: `Now fails ${v.failed_gates.map((f) => f.replace(/_/g, ' ')).join(' and ')} — the reason you bought it no longer holds.`,
+    })
+  }
+  if (v.stop_distance_pct !== null && v.stop_distance_pct <= 0) {
+    out.push({ tone: 'bad', text: 'Trading below your stop. The decision was made when you set it.' })
+  } else if (v.stop_distance_pct !== null && v.stop_distance_pct < 0.03) {
+    out.push({ tone: 'warn', text: `Only ${(v.stop_distance_pct * 100).toFixed(1)}% above the stop.` })
+  }
+  if (v.decile !== null && v.decile <= 3) {
+    out.push({ tone: 'warn', text: `Scores in decile ${v.decile} — near the bottom of the tracked universe.` })
+  } else if (v.decile !== null && v.decile >= 9) {
+    out.push({ tone: 'good', text: `Still decile ${v.decile}; the case that got you in is intact.` })
+  }
+  if (v.to_target_pct !== null && v.to_target_pct <= 0) {
+    out.push({ tone: 'good', text: 'Target reached. Nothing in the plan says hold beyond it.' })
+  }
+  if (setup?.setup_status === 'triggered') {
+    out.push({ tone: 'good', text: 'A fresh reversal has confirmed at support.' })
+  }
+  if (v.return_pct !== null && v.risk_remaining !== null && v.risk_remaining < 0 && v.return_pct > 0) {
+    out.push({ tone: 'good', text: 'Above entry with the stop below cost — this position can no longer lose money.' })
+  }
+  if (!out.length) {
+    out.push({ tone: 'good', text: 'Nothing needs attention today.' })
+  }
+  return out
+}

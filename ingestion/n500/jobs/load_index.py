@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
         for day in trading_day_candidates(args.days):
             cached = nse_index._cache_path(day).exists()
             try:
-                quote = nse_index.fetch(client, day)
+                quotes = nse_index.fetch_all(client, day)
             except IndexArchiveUnavailable:
                 missing += 1
                 continue
@@ -47,15 +47,17 @@ def main(argv: list[str] | None = None) -> int:
                 log.error(day.isoformat(), str(exc))
                 continue
 
-            if quote is not None:
-                rows.append(nse_index.to_row(quote))
-                log.symbols_ok += 1
+            rows.extend(nse_index.to_row(q) for q in quotes)
+            log.symbols_ok += 1
 
             if not cached:
                 time.sleep(args.pause + random.uniform(0, 0.15))
 
         log.rows_written = db.upsert("index_prices", rows, on_conflict="index_name,date")
-        log.notes = f"{len(rows)} sessions of {nse_index.BENCHMARK} ({missing} skipped)"
+        indices = len({r["index_name"] for r in rows})
+        log.notes = (
+            f"{log.symbols_ok} sessions across {indices} indices ({missing} skipped)"
+        )
         summary = log.notes
 
     mode = "dry run" if db.dry_run else "Supabase"

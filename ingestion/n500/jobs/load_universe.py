@@ -18,6 +18,7 @@ from datetime import date
 from ..db import Db, run
 from ..sources.universe import (
     UniverseParseError,
+    etf_constituents,
     fetch_constituents,
     to_stock_row,
     week_start,
@@ -46,9 +47,13 @@ def main(argv: list[str] | None = None) -> int:
             log.error("*", f"fetch/parse failed: {exc}")
             raise
 
+        # ETFs are tracked but are not index members, so they go into `stocks`
+        # and never into `index_membership` — a backtest reconstructing the
+        # Nifty 500 of a past date must not find a gold ETF in it.
+        etfs = etf_constituents()
         symbols = {c.symbol for c in constituents}
 
-        stock_rows = [to_stock_row(c, today=today) for c in constituents]
+        stock_rows = [to_stock_row(c, today=today) for c in constituents + etfs]
         log.rows_written += db.upsert("stocks", stock_rows, on_conflict="symbol")
 
         membership_rows = [
@@ -63,11 +68,12 @@ def main(argv: list[str] | None = None) -> int:
 
         log.symbols_ok = len(symbols)
 
+        tracked = symbols | {c.symbol for c in etfs}
         dropped = 0
         if not db.dry_run:
             existing = db.select("stocks", "symbol,is_active")
             for row in existing:
-                if row["is_active"] and row["symbol"] not in symbols:
+                if row["is_active"] and row["symbol"] not in tracked:
                     db.update(
                         "stocks",
                         {"is_active": False},
@@ -75,10 +81,14 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     dropped += 1
 
-        log.notes = f"{len(symbols)} constituents, {dropped} dropped out, week of {monday}"
+        log.notes = (
+            f"{len(symbols)} constituents + {len(etfs)} ETFs, "
+            f"{dropped} dropped out, week of {monday}"
+        )
 
     mode = "dry run" if db.dry_run else "Supabase"
-    print(f"[{JOB}] {len(symbols)} constituents written ({mode}), week of {monday}")
+    print(f"[{JOB}] {len(symbols)} constituents + {len(etfs)} ETFs written ({mode}), "
+          f"week of {monday}")
     return 0
 
 

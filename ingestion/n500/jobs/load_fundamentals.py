@@ -181,10 +181,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.symbols:
         universe = sorted({s.strip().upper() for s in args.symbols.split(",")})
     else:
+        # ETFs have no financial statements; asking Screener for them would be
+        # 9 guaranteed failures a night and 9 rows of noise in the error log.
         universe = sorted(
             row["symbol"]
-            for row in db.select("stocks", "symbol,is_active")
-            if row.get("is_active", True)
+            for row in db.select("stocks", "symbol,is_active,instrument_type")
+            if row.get("is_active", True) and row.get("instrument_type") != "etf"
         )
     if args.limit:
         universe = universe[: args.limit]

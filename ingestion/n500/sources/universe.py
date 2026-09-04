@@ -26,6 +26,34 @@ MAX_EXPECTED_ROWS = 520
 ISIN_RE = re.compile(r"^IN[A-Z0-9]{10}$")
 
 
+# Exchange-traded funds worth watching alongside the index constituents.
+#
+# They are ordinary EQ/STK rows in the bhavcopy, so prices, technicals and
+# support zones all work unchanged. They have no financial statements, so the
+# quality and value pillars stay null and the blend falls back to the technical
+# — which is the honest answer for an instrument that has no revenue.
+#
+# Chosen to cover the asset classes a Nifty 500 screener cannot otherwise see:
+# gold and silver, the large- and mid-cap indices in tradeable form, and a
+# little offshore equity.
+TRACKED_ETFS: dict[str, str] = {
+    "GOLDBEES": "Nippon India ETF Gold BeES",
+    "SILVERBEES": "Nippon India Silver ETF",
+    "NIFTYBEES": "Nippon India ETF Nifty 50 BeES",
+    "BANKBEES": "Nippon India ETF Nifty Bank BeES",
+    "JUNIORBEES": "Nippon India ETF Nifty Next 50 Junior BeES",
+    "ITBEES": "Nippon India ETF Nifty IT",
+    "MON100": "Motilal Oswal Nasdaq 100 ETF",
+    "HNGSNGBEES": "Nippon India ETF Hang Seng BeES",
+}
+
+# LIQUIDBEES was tracked briefly and removed. It is a cash-equivalent that sits
+# near 1000 and barely moves, so the volatility guard rewarded it for going
+# nowhere and it scored into the top decile — a momentum screener has nothing
+# useful to say about a money-market proxy, and leaving it in would put a
+# parking instrument at the top of a list of investment candidates.
+
+
 @dataclass(frozen=True)
 class Constituent:
     symbol: str
@@ -34,6 +62,7 @@ class Constituent:
     industry: str
     isin: str
     series: str
+    instrument_type: str = "equity"
 
 
 class UniverseParseError(RuntimeError):
@@ -115,8 +144,27 @@ def week_start(on: date | None = None) -> date:
     return on - timedelta(days=on.weekday())
 
 
+def etf_constituents() -> list[Constituent]:
+    """The tracked ETFs, shaped like constituents so one loader handles both."""
+    return [
+        Constituent(
+            symbol=symbol,
+            company_name=name,
+            # Their own bucket: ranking a gold ETF against equities on any
+            # sector-relative metric would be comparing unlike things.
+            sector="Exchange Traded Funds",
+            industry="Exchange Traded Funds",
+            isin="",
+            series="EQ",
+            instrument_type="etf",
+        )
+        for symbol, name in sorted(TRACKED_ETFS.items())
+    ]
+
+
 def to_stock_row(item: Constituent, *, today: date) -> dict:
     row = asdict(item)
+    row.pop("isin") if not row.get("isin") else None
     row["last_seen_on"] = today.isoformat()
     row["is_active"] = True
     row["updated_at"] = f"{today.isoformat()}T00:00:00+00:00"

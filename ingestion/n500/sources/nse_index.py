@@ -25,6 +25,25 @@ CACHE_DIR = DATA_DIR / "cache" / "indices"
 
 BENCHMARK = "Nifty 500"
 
+# Stored for market context alongside the benchmark. A screener that can only
+# see its own universe cannot tell you whether a stock is falling because the
+# business is failing or because the whole market is — and India VIX is the
+# cheapest read on whether the tape is calm or frightened.
+TRACKED_INDICES = (
+    BENCHMARK,
+    "Nifty 50",
+    "Nifty Bank",
+    "Nifty Midcap 150",
+    "Nifty Smallcap 250",
+    "Nifty IT",
+    "Nifty Auto",
+    "Nifty Pharma",
+    "Nifty FMCG",
+    "Nifty Metal",
+    "Nifty Realty",
+    "India VIX",
+)
+
 REQUIRED_COLUMNS = {
     "Index Name", "Index Date", "Open Index Value", "High Index Value",
     "Low Index Value", "Closing Index Value",
@@ -100,7 +119,9 @@ def fetch_raw(client: httpx.Client, on: date, *, use_cache: bool = True) -> str:
     return text
 
 
-def parse(text: str, *, only: str | None = BENCHMARK) -> dict[str, IndexQuote]:
+def parse(
+    text: str, *, only: str | None = None, keep: tuple[str, ...] = TRACKED_INDICES
+) -> dict[str, IndexQuote]:
     reader = csv.DictReader(io.StringIO(text))
     columns = {c.strip() for c in (reader.fieldnames or [])}
     missing = REQUIRED_COLUMNS - columns
@@ -115,6 +136,8 @@ def parse(text: str, *, only: str | None = BENCHMARK) -> dict[str, IndexQuote]:
             continue
         seen += 1
         if only is not None and name != only:
+            continue
+        if only is None and keep is not None and name not in keep:
             continue
 
         close = _number(row.get("Closing Index Value"))
@@ -140,8 +163,9 @@ def parse(text: str, *, only: str | None = BENCHMARK) -> dict[str, IndexQuote]:
             f"only {seen} indices in the file, expected at least "
             f"{MIN_EXPECTED_INDICES} — the layout probably changed"
         )
-    if only is not None and only not in quotes:
-        raise IndexArchiveError(f"benchmark {only!r} not present in the file")
+    required = only or BENCHMARK
+    if required not in quotes:
+        raise IndexArchiveError(f"benchmark {required!r} not present in the file")
 
     return quotes
 
@@ -159,13 +183,19 @@ def _parse_date(raw: str) -> date:
 
 
 def fetch(client: httpx.Client, on: date, *, use_cache: bool = True) -> IndexQuote | None:
-    quotes = parse(fetch_raw(client, on, use_cache=use_cache))
-    return quotes.get(BENCHMARK)
+    """The benchmark only — kept for callers that just need relative strength."""
+    return parse(fetch_raw(client, on, use_cache=use_cache)).get(BENCHMARK)
+
+
+def fetch_all(client: httpx.Client, on: date, *, use_cache: bool = True) -> list[IndexQuote]:
+    """Every tracked index for a date."""
+    return list(parse(fetch_raw(client, on, use_cache=use_cache)).values())
 
 
 def to_row(quote: IndexQuote) -> dict:
     return {
         "index_name": quote.index_name,
+        "is_benchmark": quote.index_name == BENCHMARK,
         "date": quote.date.isoformat(),
         "open": quote.open,
         "high": quote.high,

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, CircleAlert, Info } from 'lucide-react'
-import type { AlertRow, PositionsFile, Severity } from '../types'
+import type { AlertRow, Severity } from '../types'
 import { pct } from '../lib/format'
+import { loadPortfolio, loadScreener, type PositionView } from '../lib/load'
+import { AddHolding } from '../components/AddHolding'
 
 const SEVERITY_STYLE: Record<Severity, { chip: string; icon: React.ReactNode; label: string }> = {
   critical: {
@@ -23,27 +25,37 @@ const SEVERITY_STYLE: Record<Severity, { chip: string; icon: React.ReactNode; la
 }
 
 export function Portfolio() {
-  const [data, setData] = useState<PositionsFile | null>(null)
+  const [positions, setPositions] = useState<PositionView[]>([])
+  const [universe, setUniverse] = useState<any[]>([])
   const [alerts, setAlerts] = useState<AlertRow[]>([])
+  const [reload, setReload] = useState(0)
 
   useEffect(() => {
     let cancelled = false
-    const base = import.meta.env.BASE_URL
-    fetch(`${base}positions.json`)
-      .then((r) => (r.ok ? r.json() : { positions: [], totals: {} }))
-      .then((d) => !cancelled && setData(d))
-      .catch(() => !cancelled && setData({ positions: [], totals: {} }))
-    fetch(`${base}alerts.json`)
+    loadPortfolio().then(({ positions }) => !cancelled && setPositions(positions))
+    fetch(`${import.meta.env.BASE_URL}alerts.json`)
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => !cancelled && setAlerts(Array.isArray(d) ? d : []))
       .catch(() => !cancelled && setAlerts([]))
     return () => {
       cancelled = true
     }
+  }, [reload])
+
+  useEffect(() => {
+    loadScreener().then(({ snapshot }) => setUniverse(snapshot.rows))
   }, [])
 
-  const totals = data?.totals ?? {}
-  const positions = data?.positions ?? []
+  const invested = positions.reduce((s, p) => s + p.entry_price * p.quantity, 0)
+  const value = positions.reduce((s, p) => s + (p.value ?? 0), 0)
+  const totals = {
+    invested,
+    value,
+    pnl: value - invested,
+    return_pct: invested ? value / invested - 1 : null,
+    risk_remaining: positions.reduce((s, p) => s + (p.risk_remaining ?? 0), 0),
+    thesis_broken: positions.filter((p) => p.thesis_intact === false).length,
+  }
 
   return (
     <>
@@ -93,6 +105,10 @@ export function Portfolio() {
         </p>
       )}
 
+      <div className="mb-6">
+        <AddHolding rows={universe} onAdded={() => setReload((n) => n + 1)} />
+      </div>
+
       {positions.length > 0 && (
         <>
           <div className="mb-4 grid gap-3 sm:grid-cols-4">
@@ -116,71 +132,80 @@ export function Portfolio() {
             />
           </div>
 
-          <div className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-800">
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr className="bg-slate-100 text-left font-mono text-[11px] uppercase tracking-wider text-slate-500 dark:bg-slate-900">
-                  <th className="px-3 py-2">Symbol</th>
-                  <th className="px-3 py-2 text-right">Qty</th>
-                  <th className="px-3 py-2 text-right">Entry</th>
-                  <th className="px-3 py-2 text-right">Close</th>
-                  <th className="px-3 py-2 text-right">Return</th>
-                  <th className="px-3 py-2 text-right">To stop</th>
-                  <th className="px-3 py-2 text-right">Decile</th>
-                  <th className="px-3 py-2">Thesis</th>
-                </tr>
-              </thead>
-              <tbody>
-                {positions.map((p) => (
-                  <tr key={`${p.symbol}-${p.id}`} className="border-t border-slate-200 dark:border-slate-800">
-                    <td className="px-3 py-2">
-                      <Link to={`/stock/${p.symbol}`} className="font-mono font-medium hover:underline">
-                        {p.symbol}
-                      </Link>
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums">{p.quantity}</td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums">{p.entry_price.toFixed(2)}</td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums">{p.close?.toFixed(2) ?? '—'}</td>
-                    <td className={`px-3 py-2 text-right font-mono tabular-nums ${
-                      (p.return_pct ?? 0) >= 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'
-                    }`}>
-                      {pct(p.return_pct ?? null)}
-                    </td>
-                    <td className={`px-3 py-2 text-right font-mono tabular-nums ${
-                      (p.stop_distance_pct ?? 1) <= 0 ? 'text-red-700 dark:text-red-400' : 'text-slate-500'
-                    }`}>
-                      {pct(p.stop_distance_pct ?? null, 0)}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-500">
-                      {p.decile ?? '—'}
-                    </td>
-                    <td className="px-3 py-2 text-xs">
-                      {p.thesis_intact === false ? (
-                        <span className="rounded bg-red-100 px-2 py-0.5 text-red-800 dark:bg-red-950/60 dark:text-red-300">
-                          broken: {(p.failed_gates ?? []).join(', ')}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">{p.thesis ?? 'intact'}</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="grid gap-3">
+            {positions.map((p) => (
+              <div key={`${p.symbol}-${p.id}`}
+                   className="rounded-md border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <Link to={`/stock/${p.symbol}`} className="font-mono text-base font-semibold hover:underline">
+                    {p.symbol}
+                  </Link>
+                  <span className="text-sm text-slate-500">
+                    {p.quantity} @ {p.entry_price.toFixed(2)}
+                    {p.entry_date && <> since {p.entry_date}</>}
+                  </span>
+                  <span className={`ml-auto font-mono text-lg tabular-nums ${
+                    (p.return_pct ?? 0) >= 0 ? 'text-emerald-700 dark:text-emerald-400'
+                                             : 'text-red-700 dark:text-red-400'}`}>
+                    {pct(p.return_pct)}
+                  </span>
+                </div>
+
+                <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-5">
+                  <Cell label="Close" value={p.close?.toFixed(2) ?? '—'} />
+                  <Cell label="P&L" value={p.pnl === null ? '—' : `₹${p.pnl.toLocaleString('en-IN', {maximumFractionDigits: 0})}`} />
+                  <Cell label="Stop" value={p.stop_price?.toFixed(2) ?? '—'}
+                        hint={p.stop_distance_pct === null ? undefined : `${pct(p.stop_distance_pct, 0)} away`} />
+                  <Cell label="Still at risk"
+                        value={p.risk_remaining === null ? '—' : `₹${Math.max(p.risk_remaining, 0).toLocaleString('en-IN', {maximumFractionDigits: 0})}`} />
+                  <Cell label="Score" value={p.blended?.toFixed(0) ?? '—'}
+                        hint={p.decile === null ? undefined : `decile ${p.decile}`} />
+                </dl>
+
+                {p.thesis && (
+                  <p className="mt-3 border-l-2 border-slate-200 pl-3 text-sm italic text-slate-500 dark:border-slate-700">
+                    “{p.thesis}”
+                  </p>
+                )}
+
+                <ul className="mt-3 grid gap-1 text-sm">
+                  {p.insights.map((ins, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className={`mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+                        ins.tone === 'bad' ? 'bg-red-500'
+                          : ins.tone === 'warn' ? 'bg-amber-400' : 'bg-emerald-500'}`} />
+                      <span className={ins.tone === 'bad' ? 'text-red-800 dark:text-red-300'
+                        : ins.tone === 'warn' ? 'text-amber-900 dark:text-amber-300'
+                        : 'text-slate-600 dark:text-slate-400'}>{ins.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
         </>
       )}
 
       {positions.length === 0 && (
         <p className="rounded-md border border-slate-200 p-6 text-sm text-slate-500 dark:border-slate-800">
-          No open positions. Record one with{' '}
-          <code className="font-mono text-xs">
-            python -m n500.jobs.manage_position open SYMBOL --qty N --price P --stop S
-          </code>
-          . A stop is required — the alert engine cannot measure risk without one.
+          No open holdings recorded yet. Add the stocks you already own above and the
+          tracker will score them alongside everything else, and tell you when the
+          reason you bought one stops being true.
         </p>
       )}
     </>
+  )
+}
+
+function Cell({
+  label, value, hint,
+}: { label: string; value: string; hint?: string }) {
+  return (
+    <div>
+      <dt className="font-mono text-[10px] uppercase tracking-wider text-slate-500">{label}</dt>
+      <dd className="font-mono tabular-nums">{value}</dd>
+      {hint && <dd className="text-xs text-slate-400">{hint}</dd>}
+    </div>
   )
 }
 
