@@ -4,8 +4,6 @@ import { TriangleAlert } from 'lucide-react'
 import type { ScreenerRow } from './types'
 import { useAuth } from './lib/auth'
 import { loadScreener } from './lib/load'
-import { SignIn } from './pages/SignIn'
-import { supabase } from './lib/supabase'
 import { Portfolio } from './pages/Portfolio'
 import { Screener } from './pages/Screener'
 import { StockDetail } from './pages/StockDetail'
@@ -16,14 +14,17 @@ export default function App() {
   const [source, setSource] = useState<'supabase' | 'snapshot'>('snapshot')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const { session, loading: authLoading, signOut } = useAuth()
+  const { session, signOut } = useAuth()
 
-  // Nothing is readable without a session, so there is no point fetching until
-  // there is one.
-  const gated = Boolean(supabase) && !session
+  // No sign-in required: the database is open to the anon key. The auth
+  // provider stays wired up so restoring the gate is one flag, but nothing is
+  // withheld while it is off.
+  const gated = false
+  const authLoading = false
+  void gated
+  void authLoading
 
   useEffect(() => {
-    if (gated || authLoading) return
     let cancelled = false
     loadScreener().then(({ snapshot, source, error }) => {
       if (cancelled) return
@@ -36,14 +37,7 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [gated, authLoading])
-
-  if (authLoading) {
-    return <p className="p-10 text-sm text-slate-500">Checking your session…</p>
-  }
-  if (gated) {
-    return <SignIn />
-  }
+  }, [])
 
   return (
     // Hash routing so deep links survive GitHub Pages, which has no rewrite rule.
