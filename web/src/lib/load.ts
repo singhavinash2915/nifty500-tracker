@@ -73,6 +73,8 @@ function toScreenerRow(r: Record<string, any>): ScreenerRow {
     tm_score: r.tm_score,
     ts_score: r.ts_score,
     blended: r.blended,
+    conviction: r.conviction ?? null,
+    conviction_decile: r.conviction_decile ?? null,
     winning_setup: r.winning_setup ?? 'none',
     setup_status: r.setup_status ?? 'none',
     decile: r.decile,

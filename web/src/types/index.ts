@@ -24,6 +24,9 @@ export interface ScreenerRow {
   ts_score: number | null
   /** max(T-M, T-S) blended with Q, V, R and O. */
   blended: number | null
+  /** The composite fitted on 2023-24 and validated once on 2025-26. */
+  conviction: number | null
+  conviction_decile: number | null
   winning_setup: Setup
   setup_status: SetupStatus
   decile: number | null

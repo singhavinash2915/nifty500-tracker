@@ -8,13 +8,13 @@ import { pct } from '../lib/format'
 import { MarketStrip } from '../components/MarketStrip'
 
 type SortKey =
-  | 'blended' | 'quality_score' | 'value_score' | 'revision_score'
+  | 'conviction' | 'blended' | 'quality_score' | 'value_score' | 'revision_score'
   | 'ownership_score' | 'technical' | 'mom_12_1' | 'symbol'
 type View = 'all' | 'support' | 'excluded'
 
 export function Screener({ rows }: { rows: ScreenerRow[] }) {
   const [weights, setWeights] = useState<Weights>(DEFAULT_WEIGHTS)
-  const [sort, setSort] = useState<SortKey>('blended')
+  const [sort, setSort] = useState<SortKey>('conviction')
   const [asc, setAsc] = useState(false)
   const [query, setQuery] = useState('')
   const [sector, setSector] = useState('all')
@@ -177,6 +177,9 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
             </div>
             <p className="mt-0.5 truncate text-xs text-slate-500">{row.company_name}</p>
             <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono text-xs text-slate-500">
+              <span className="font-semibold text-slate-700 dark:text-slate-200">
+                C {row.conviction?.toFixed(0) ?? '—'}
+              </span>
               <span>Q {row.quality_score?.toFixed(0) ?? '—'}</span>
               <span>V {row.value_score?.toFixed(0) ?? '—'}</span>
               <span>R {row.revision_score?.toFixed(0) ?? '—'}</span>
@@ -204,6 +207,9 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
               <Th onClick={() => toggleSort('symbol')} active={sort === 'symbol'}>Symbol</Th>
               <th className="px-3 py-2">Sector</th>
               <th className="px-3 py-2 text-right">Close</th>
+              <Th right onClick={() => toggleSort('conviction')} active={sort === 'conviction'}>
+                Conviction
+              </Th>
               <Th right onClick={() => toggleSort('blended')} active={sort === 'blended'}>Blend</Th>
               <Th right onClick={() => toggleSort('quality_score')} active={sort === 'quality_score'}>Q</Th>
               <Th right onClick={() => toggleSort('value_score')} active={sort === 'value_score'}>V</Th>
@@ -226,6 +232,13 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
                 <td className="px-3 py-2 text-xs text-slate-500">{row.sector}</td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums">
                   {row.close?.toFixed(2) ?? '—'}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {excluded ? (
+                    <span className="text-slate-400">—</span>
+                  ) : (
+                    <ScoreChip value={row.conviction} capped={false} />
+                  )}
                 </td>
                 <td className="px-3 py-2 text-right">
                   {excluded ? (

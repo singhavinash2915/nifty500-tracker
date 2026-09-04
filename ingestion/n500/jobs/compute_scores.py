@@ -22,13 +22,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
 
 from ..config import settings
 from ..db import Db, run
-from ..scoring import momentum, redflags
+from ..scoring import conviction, momentum, redflags
 from ..scoring.ranking import peer_groups
 
 JOB = "compute_scores"
@@ -84,8 +85,16 @@ def main(argv: list[str] | None = None) -> int:
 
     db = Db(force_dry_run=args.dry_run)
 
-    technicals = pd.DataFrame(db.select("technicals_daily"))
-    prices = pd.DataFrame(db.select("prices_daily"))
+    # Both of these are wanted only for their most recent row per symbol, and
+    # reading them whole is 775 paged requests that get slower with depth. A
+    # fortnight covers any gap a holiday or a suspension can open.
+    recent = (date.today() - timedelta(days=21)).isoformat()
+    technicals = pd.DataFrame(
+        db.select("technicals_daily", since=("date", recent))
+    )
+    prices = pd.DataFrame(
+        db.select("prices_daily", columns="symbol,date,adj_close", since=("date", recent))
+    )
     stocks = pd.DataFrame(db.select("stocks"))
 
     if technicals.empty or prices.empty or stocks.empty:
@@ -191,6 +200,46 @@ def main(argv: list[str] | None = None) -> int:
         blended = blended.mask(excluded)
         winner = winner.mask(excluded, "none")
 
+        # The validated composite, computed beside the blend rather than in
+        # place of it. Its inputs are spread across three tables, so they are
+        # assembled here — the only place that already holds all of them.
+        features = pd.DataFrame(index=snapshot.index)
+        features["tm_score"] = tm
+        features["value_score"] = v
+        features["ownership_score"] = own
+        if not setups.empty:
+            for name in ("headroom", "resistance_strength", "zone_respect"):
+                if name in latest_setups:
+                    features[name] = pd.to_numeric(
+                        latest_setups[name].reindex(snapshot.index), errors="coerce"
+                    )
+            for name in ("rejected_at_resistance", "doji_at_resistance",
+                         "hanging_man_at_resistance", "shooting_star_at_resistance",
+                         "bearish_engulfing_at_resistance"):
+                if name in latest_setups:
+                    features[name] = (
+                        latest_setups[name].reindex(snapshot.index)
+                        .fillna(False).astype(bool).astype("float64")
+                    )
+            if "false_breakout" in latest_setups:
+                # Stored as the event's detail or null, and the composite wants
+                # the fact rather than the detail.
+                features["false_breakout"] = (
+                    latest_setups["false_breakout"].reindex(snapshot.index)
+                    .notna().astype("float64")
+                )
+        if not fundamentals.empty and "margin_revision" in latest_f:
+            features["margin_revision"] = pd.to_numeric(
+                latest_f["margin_revision"].reindex(snapshot.index), errors="coerce"
+            )
+
+        conv = conviction.score(features).mask(excluded)
+        conv_decile = pd.Series(pd.NA, index=conv.index, dtype="Int64")
+        if conv.notna().sum() >= 10:
+            conv_decile[conv.notna()] = (
+                pd.qcut(conv[conv.notna()].rank(method="first"), 10, labels=False) + 1
+            ).astype("Int64")
+
         sector_rank = (
             blended.groupby(groups).rank(ascending=False, method="min").astype("Int64")
         )
@@ -229,6 +278,11 @@ def main(argv: list[str] | None = None) -> int:
                         None if pd.isna(snapshot.at[symbol, "sma200"])
                         else bool(snapshot.at[symbol, "close"] > snapshot.at[symbol, "sma200"])
                     ),
+                    "conviction": None if pd.isna(conv.loc[symbol]) else float(conv.loc[symbol]),
+                    "conviction_decile": (
+                        None if pd.isna(conv_decile.loc[symbol])
+                        else int(conv_decile.loc[symbol])
+                    ),
                     "sector_rank": None if pd.isna(sector_rank.loc[symbol]) else int(sector_rank.loc[symbol]),
                     "decile": None if pd.isna(decile.loc[symbol]) else int(decile.loc[symbol]),
                     "flags": flags_by.get(symbol, []),
@@ -242,7 +296,8 @@ def main(argv: list[str] | None = None) -> int:
         log.notes = (
             f"{len(rows)} scored as of {as_of}; {support_wins} led by the "
             f"support setup; {int(excluded.sum())} excluded by a red flag "
-            f"({thin} of them for turnover)"
+            f"({thin} of them for turnover); {int(conv.notna().sum())} with a "
+            f"conviction score"
         )
         summary = log.notes
 

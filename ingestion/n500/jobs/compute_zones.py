@@ -21,7 +21,7 @@ import pandas as pd
 from .. import indicators as ind
 from ..db import Db, run
 from ..scoring import plan, support
-from ..zones import reversal
+from ..zones import candles, reversal
 from ..zones.build import build_zones, live_zones_above, live_zones_below
 from ..zones.pivots import find_pivots
 from .compute_technicals import MIN_BARS, adjusted_frame
@@ -261,6 +261,12 @@ def _plan(daily: pd.DataFrame, zones: list) -> dict:
         resistance=above[0].floor if above else None,
     )
     return {
+        # Respect of the band beneath, as of this bar. The composite reads it,
+        # and `zone.respect` without an index would be the whole-life ratio —
+        # the look-ahead that produced a t of +17 before it was caught.
+        "zone_respect": (
+            below[0].respect_at(index) if below else None
+        ),
         "plan_stop": built.stop,
         "plan_stop_basis": built.stop_basis,
         "plan_stop_pct": built.stop_pct,
@@ -283,6 +289,10 @@ def _overhead(daily: pd.DataFrame, zones: list, setup) -> dict:
         return {}
 
     zone = above[0]
+    # The candle readings the validated composite needs. They lived only inside
+    # the backtest until now, which is a strange place for the best-evidenced
+    # part of the model to be. Same functions, called on the latest bar.
+    patterns = candles.at_resistance(daily, index, floor=zone.floor, ceil=zone.ceil)
     return {
         "resistance_floor": round(zone.floor, 4),
         "resistance_ceil": round(zone.ceil, 4),
@@ -292,6 +302,12 @@ def _overhead(daily: pd.DataFrame, zones: list, setup) -> dict:
         ),
         "rejected_at_resistance": reversal.rejected_at_resistance(
             daily, index, floor=zone.floor, ceil=zone.ceil
+        ),
+        "doji_at_resistance": bool(patterns.get("doji_at_resistance", False)),
+        "hanging_man_at_resistance": bool(patterns.get("hanging_man_at_resistance", False)),
+        "shooting_star_at_resistance": bool(patterns.get("shooting_star_at_resistance", False)),
+        "bearish_engulfing_at_resistance": bool(
+            patterns.get("bearish_engulfing_at_resistance", False)
         ),
     }
 

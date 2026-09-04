@@ -254,6 +254,12 @@ def main(argv: list[str] | None = None) -> int:
                     "value_score": None if excluded or pd.isna(v.loc[symbol]) else round(float(v.loc[symbol]), 2),
                     "revision_score": None if excluded or pd.isna(r.loc[symbol]) else round(float(r.loc[symbol]), 2),
                     "ownership_score": None if excluded or pd.isna(o.loc[symbol]) else round(float(o.loc[symbol]), 2),
+                    # Kept raw as well as folded into R: the validated
+                    # composite reads the metric, not the pillar.
+                    "margin_revision": (
+                        None if pd.isna(table.at[symbol, "margin_revision"])
+                        else round(float(table.at[symbol, "margin_revision"]), 4)
+                    ),
                     "excluded": excluded,
                     "flags": redflags.summarise(flags),
                 }

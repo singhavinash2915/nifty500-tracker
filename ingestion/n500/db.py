@@ -246,6 +246,7 @@ class Db:
         columns: str = "*",
         *,
         where: dict[str, Any] | None = None,
+        since: tuple[str, Any] | None = None,
         page_size: int = 1000,
     ) -> list[dict[str, Any]]:
         """Read a whole table, paging through PostgREST's row cap.
@@ -257,10 +258,21 @@ class Db:
         every downstream job reported success on a fiftieth of the data. Silent
         truncation is the worst shape a bug can take, so reads page until a
         short page proves the end.
+
+        `since` is a `(column, value)` pair applied as `>=`, and it is not an
+        optimisation so much as a limit on how far this pattern scales. Paging
+        the whole price table is 775 requests and the deep pages get slower as
+        the offset grows, because OFFSET makes the database walk everything it
+        is skipping; at three quarters of a million rows that started hitting
+        the statement timeout. A job that only wants recent bars should say so.
         """
         if self.dry_run:
             path = DRYRUN_DIR / f"{table}.json"
-            return json.loads(path.read_text()) if path.exists() else []
+            rows = json.loads(path.read_text()) if path.exists() else []
+            if since is not None:
+                column, value = since
+                rows = [r for r in rows if str(r.get(column, "")) >= str(value)]
+            return rows
 
         order_by = PAGE_ORDER.get(table)
         if order_by is None:
@@ -275,6 +287,8 @@ class Db:
             query = self._client.table(table).select(columns)
             for column, value in (where or {}).items():
                 query = query.eq(column, value)
+            if since is not None:
+                query = query.gte(since[0], since[1])
             for column in order_by:
                 query = query.order(column)
             page = query.range(start, start + page_size - 1).execute().data
