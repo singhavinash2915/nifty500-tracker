@@ -31,6 +31,11 @@ fi
 # osascript rather than a notifier package: it is already on every Mac, it needs
 # no credentials, and a dependency that has to be installed is one that will be
 # missing on the machine where this matters.
+#
+# On the Linux box there is no desktop to notify and this silently does nothing,
+# which is correct — the channel there is the banner in the app, driven by the
+# `verify` row in ingestion_runs, and that one reaches you wherever you are
+# rather than only at the machine.
 notify() {
   local title="$1" message="$2"
   osascript -e "display notification \"${message//\"/}\" with title \"${title//\"/}\"" \
