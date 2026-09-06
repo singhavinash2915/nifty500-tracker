@@ -61,6 +61,10 @@ def plan(days: int, *, dry_run: bool, skip_fundamentals: bool) -> list[Step]:
         Step("snapshot", "export_snapshot", common, needs=("scores",)),
         Step("positions", "compute_positions", common, needs=("scores",)),
         Step("alerts", "compute_alerts", [*common, "--quiet"], needs=("scores",)),
+        # Last, and it needs nothing: the invariants should run even when a
+        # step failed, because the interesting question then is exactly what
+        # the half-finished output looks like.
+        Step("verify", "verify", common),
     ]
     return steps
 
