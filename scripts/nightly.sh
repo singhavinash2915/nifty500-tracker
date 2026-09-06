@@ -23,10 +23,32 @@ if [ "$(date +%u)" != "7" ]; then
   EXTRA="--skip-fundamentals"
 fi
 
+# A failure that nobody hears about is a failure that gets acted on. The 19:15
+# run on 4 September failed at its first step, skipped the other nine, and sat
+# silently until somebody thought to ask — while the app went on showing the
+# previous day's ranking as though it were current.
+#
+# osascript rather than a notifier package: it is already on every Mac, it needs
+# no credentials, and a dependency that has to be installed is one that will be
+# missing on the machine where this matters.
+notify() {
+  local title="$1" message="$2"
+  osascript -e "display notification \"${message//\"/}\" with title \"${title//\"/}\"" \
+    >/dev/null 2>&1 || true
+}
+
 {
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') starting ==="
   "$REPO/.venv/bin/python" -m n500.jobs.run_nightly --days 10 $EXTRA
   STATUS=$?
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') exit $STATUS ==="
-  exit $STATUS
 } >> "$LOG" 2>&1
+
+if [ "$STATUS" -ne 0 ]; then
+  # The last line naming a step is the most useful thing to put in four inches
+  # of notification — "FAILED universe" says more than "exit 1".
+  DETAIL="$(grep -E 'FAILED|check\(s\) failed' "$LOG" | tail -1 | cut -c1-120)"
+  notify "Nifty 500 tracker — nightly failed" "${DETAIL:-see $LOG}"
+fi
+
+exit $STATUS

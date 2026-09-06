@@ -598,6 +598,54 @@ export async function loadPlans(): Promise<
   return out
 }
 
+export interface RunHealth {
+  /** 'ok' | 'partial' | 'failed' | 'running', or null when nothing has run. */
+  status: string | null
+  finished_at: string | null
+  notes: string | null
+  errors: { symbol?: string; message?: string }[]
+  /** Days since the last verification. */
+  age_days: number | null
+}
+
+/**
+ * Whether tonight's build can be trusted.
+ *
+ * `verify` runs last and asserts the things that must be true of any correct
+ * run — that only current constituents are scored, that no symbol appears
+ * twice, that every stop is below its price. Its row in `ingestion_runs` is
+ * therefore the single health signal worth reading: if it passed, what is on
+ * screen is sound; if it failed or never ran, the numbers may be confidently
+ * wrong rather than merely stale.
+ *
+ * That distinction is the whole reason this exists. The 19:15 run on 4
+ * September failed at its first step and skipped the other nine, and the app
+ * went on presenting the previous day's ranking with no indication that
+ * anything had gone wrong.
+ */
+export async function loadRunHealth(): Promise<RunHealth | null> {
+  if (!supabase) return null
+  const { data, error } = await supabase
+    .from('ingestion_runs')
+    .select('status,finished_at,notes,errors')
+    .eq('job', 'verify')
+    .order('started_at', { ascending: false })
+    .limit(1)
+  if (error || !data?.length) return null
+
+  const row = data[0] as Record<string, any>
+  const finished = row.finished_at ? new Date(row.finished_at) : null
+  return {
+    status: row.status ?? null,
+    finished_at: row.finished_at ?? null,
+    notes: row.notes ?? null,
+    errors: Array.isArray(row.errors) ? row.errors : [],
+    age_days: finished
+      ? Math.floor((Date.now() - finished.getTime()) / 86_400_000)
+      : null,
+  }
+}
+
 /** The overhead read for one symbol: nearest resistance and how price behaved at it. */
 export interface Overhead {
   floor: number | null

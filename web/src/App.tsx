@@ -3,7 +3,8 @@ import { HashRouter, Link, Route, Routes } from 'react-router-dom'
 import { TriangleAlert } from 'lucide-react'
 import type { ScreenerRow } from './types'
 import { useAuth } from './lib/auth'
-import { loadScreener } from './lib/load'
+import { loadRunHealth, loadScreener, type RunHealth as Health } from './lib/load'
+import { RunHealth } from './components/RunHealth'
 import { Portfolio } from './pages/Portfolio'
 import { Screener } from './pages/Screener'
 import { Shortlist } from './pages/Shortlist'
@@ -16,6 +17,7 @@ export default function App() {
   const [source, setSource] = useState<'supabase' | 'snapshot'>('snapshot')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [health, setHealth] = useState<Health | null>(null)
   const { session, signOut, loading: authLoading } = useAuth()
 
   useEffect(() => {
@@ -28,6 +30,7 @@ export default function App() {
       setError(error)
       setLoading(false)
     })
+    loadRunHealth().then((h) => !cancelled && setHealth(h))
     return () => {
       cancelled = true
     }
@@ -75,6 +78,10 @@ export default function App() {
             excluded outright rather than scored poorly.
           </p>
         </header>
+
+        {/* Before the snapshot notice, and louder: that one says the data is
+            old, this one says it may be wrong. */}
+        <RunHealth health={health} />
 
         {source === 'snapshot' && (
           <div className="mb-6 flex gap-3 rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
