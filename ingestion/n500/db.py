@@ -333,6 +333,26 @@ class Db:
                 return rows
             cursor = {column: page[-1][column] for column in order_by}
 
+    def count(self, table: str) -> int:
+        """How many rows, without fetching any of them.
+
+        PostgREST returns an exact count in the Content-Range header when asked,
+        so this is one request that transfers nothing. `doctor` was reading
+        every row of every table to print row counts — 776,300 prices and
+        773,051 technicals, the latter reliably exceeding the statement timeout,
+        so the health check failed on the one table whose size was the reason.
+        """
+        if self.dry_run:
+            path = DRYRUN_DIR / f"{table}.json"
+            return len(json.loads(path.read_text())) if path.exists() else 0
+        result = (
+            self._client.table(table)
+            .select("*", count="exact")
+            .limit(1)
+            .execute()
+        )
+        return int(result.count or 0)
+
     # -- run audit ---------------------------------------------------
 
     def start_run(self, job: str) -> int | None:

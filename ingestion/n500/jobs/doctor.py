@@ -71,12 +71,15 @@ def main(argv: list[str] | None = None) -> int:
     counts: dict[str, int] = {}
     for table in EXPECTED_TABLES:
         try:
-            rows = db.select(table, "*")
-            counts[table] = len(rows)
+            # Counted, not fetched. Reading 773,051 technicals rows to print
+            # the number 773,051 is how this check came to fail on the one
+            # table whose size was the whole point of checking it.
+            n = db.count(table)
+            counts[table] = n
             expected_empty = table in EXPECTED_EMPTY
-            status = OK if rows or expected_empty else WARN
-            note = "" if rows else ("  (empty, as expected)" if expected_empty else "  (empty)")
-            print(f"  [{status}] {table:20} {len(rows):>8,} rows{note}")
+            status = OK if n or expected_empty else WARN
+            note = "" if n else ("  (empty, as expected)" if expected_empty else "  (empty)")
+            print(f"  [{status}] {table:20} {n:>8,} rows{note}")
         except Exception as exc:  # noqa: BLE001
             problems += 1
             message = str(exc)
