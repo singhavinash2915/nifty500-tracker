@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import sys
 import time
 from dataclasses import dataclass, asdict
 from datetime import date, timedelta
@@ -25,6 +26,24 @@ EXPECTED_HEADER = ["Company Name", "Industry", "Symbol", "Series", "ISIN Code"]
 MIN_EXPECTED_ROWS = 450          # a real list is 500; below this something broke
 MAX_EXPECTED_ROWS = 520
 ISIN_RE = re.compile(r"^IN[A-Z0-9]{10}$")
+
+# Rows that are not companies may be skipped; a file full of them is a layout
+# change and must still fail loudly.
+#
+# NSE puts placeholders in this list during a demerger, so that the new entity
+# has somewhere to trade on the ex-date. On 7 September the file carried
+#
+#     Dummy HEG Ltd., Metals & Mining, DUMMYHEG, EQ, DUM545A01024
+#
+# and the parser refused the entire file over it, which skipped prices,
+# technicals, zones, scores and alerts — a whole night of data lost to one row
+# that should simply not be in the universe. A real ISIN begins with IN; this
+# one begins with DUM, and that is the tell.
+#
+# The threshold is what keeps the original guarantee intact. If NSE changes the
+# layout every row fails at once, the count sails past this, and the job stops
+# rather than writing 500 rows of nulls.
+MAX_SKIPPED_ROWS = 5
 
 
 # Exchange-traded funds worth watching alongside the index constituents.
@@ -107,6 +126,7 @@ def parse_csv(text: str) -> list[Constituent]:
 
     constituents: list[Constituent] = []
     seen: set[str] = set()
+    skipped: list[str] = []
 
     for line_no, row in enumerate(reader, start=2):
         symbol = (row.get("Symbol") or "").strip().upper()
@@ -115,16 +135,30 @@ def parse_csv(text: str) -> list[Constituent]:
         isin = (row.get("ISIN Code") or "").strip().upper()
         series = (row.get("Series") or "").strip().upper()
 
-        if not symbol:
-            raise UniverseParseError(f"line {line_no}: missing symbol")
-        if not name:
-            raise UniverseParseError(f"line {line_no}: {symbol} has no company name")
-        if not industry:
-            raise UniverseParseError(f"line {line_no}: {symbol} has no industry")
-        if not ISIN_RE.match(isin):
-            raise UniverseParseError(f"line {line_no}: {symbol} has bad ISIN {isin!r}")
-        if symbol in seen:
+        # A duplicate means the file is describing the index twice, which no
+        # amount of skipping repairs.
+        if symbol and symbol in seen:
             raise UniverseParseError(f"line {line_no}: duplicate symbol {symbol}")
+
+        problem = None
+        if not symbol:
+            problem = "missing symbol"
+        elif not name:
+            problem = "no company name"
+        elif not industry:
+            problem = "no industry"
+        elif not ISIN_RE.match(isin):
+            problem = f"bad ISIN {isin!r}"
+
+        if problem:
+            skipped.append(f"line {line_no}: {symbol or '?'} — {problem}")
+            if len(skipped) > MAX_SKIPPED_ROWS:
+                raise UniverseParseError(
+                    f"{len(skipped)} unusable rows, which is a layout change rather "
+                    f"than a placeholder: {'; '.join(skipped[:5])}"
+                )
+            continue
+
         seen.add(symbol)
 
         constituents.append(
@@ -146,6 +180,9 @@ def parse_csv(text: str) -> list[Constituent]:
         raise UniverseParseError(
             f"got {count} constituents, expected {MIN_EXPECTED_ROWS}-{MAX_EXPECTED_ROWS}"
         )
+
+    for note in skipped:
+        print(f"[universe] skipped {note}", file=sys.stderr)
 
     return constituents
 

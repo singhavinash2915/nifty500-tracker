@@ -45,16 +45,27 @@ def test_rejects_a_truncated_list():
         parse_csv(make_csv(12))
 
 
-def test_rejects_a_bad_isin():
-    text = HEADER + "HDFC Bank Ltd.,Financial Services,HDFCBANK,EQ,NOTANISIN\n"
-    with pytest.raises(UniverseParseError, match="bad ISIN"):
-        parse_csv(text)
+def test_a_bad_isin_is_skipped_rather_than_admitted():
+    """The policy changed, and this test changed with it.
+
+    It used to assert that one bad ISIN rejects the whole file. That was right
+    until NSE put a demerger placeholder in the list and cost a night of data —
+    see TestPlaceholderRows. What must still hold is that the row never becomes
+    a constituent, and that is what is asserted now.
+    """
+    text = make_csv(500) + "Nonsense Ltd.,Metals & Mining,NONSENSE,EQ,NOTANISIN\n"
+    out = parse_csv(text)
+    assert len(out) == 500
+    assert not any(c.symbol == "NONSENSE" for c in out)
 
 
-def test_rejects_a_missing_industry():
-    text = HEADER + "HDFC Bank Ltd.,,HDFCBANK,EQ,INE040A01034\n"
-    with pytest.raises(UniverseParseError, match="no industry"):
-        parse_csv(text)
+def test_a_row_with_no_industry_is_skipped_rather_than_admitted():
+    # A sector is not optional — every peer-relative rank in the model needs
+    # one — so the row goes rather than being ranked against everything.
+    text = make_csv(500) + "Nameless Ltd.,,NOINDUSTRY,EQ,INE999Z01011\n"
+    out = parse_csv(text)
+    assert len(out) == 500
+    assert not any(c.symbol == "NOINDUSTRY" for c in out)
 
 
 def test_rejects_duplicate_symbols():
@@ -314,3 +325,51 @@ class TestFetchRetries:
         with pytest.raises(httpx.HTTPStatusError):
             universe.fetch_csv("http://x", attempts=3)
         assert calls["n"] == 3
+
+
+class TestPlaceholderRows:
+    """NSE inserts placeholders during a demerger, so the new entity has
+    somewhere to trade on the ex-date. On 7 September the file carried
+
+        Dummy HEG Ltd., Metals & Mining, DUMMYHEG, EQ, DUM545A01024
+
+    and the parser refused the whole file over it — skipping prices,
+    technicals, zones, scores and alerts, a night of data lost to one row that
+    should simply not be in the universe. A real ISIN begins with IN.
+
+    The tolerance has to be narrow, because the strictness is load-bearing: if
+    NSE changes the layout, every row fails at once and the job must stop rather
+    than write 500 rows of nulls.
+    """
+
+    DUMMY = "Dummy HEG Ltd.,Metals & Mining,DUMMYHEG,EQ,DUM545A01024\n"
+
+    def test_a_placeholder_is_skipped_not_fatal(self):
+        text = make_csv(500) + self.DUMMY
+        out = parse_csv(text)
+        assert len(out) == 500
+        assert not any(c.symbol == "DUMMYHEG" for c in out)
+
+    def test_a_handful_of_bad_rows_is_still_tolerated(self):
+        text = make_csv(500) + self.DUMMY * 3
+        assert len(parse_csv(text)) == 500
+
+    def test_a_fileful_of_bad_rows_fails_loudly(self):
+        # What a layout change looks like: nothing parses, and writing 500 rows
+        # of nulls would be far worse than stopping.
+        text = HEADER + self.DUMMY * 60
+        with pytest.raises(UniverseParseError, match="layout change"):
+            parse_csv(text)
+
+    def test_a_duplicate_is_still_fatal(self):
+        # Not a placeholder — the file is describing the index twice, and no
+        # amount of skipping repairs that. `make_csv` renames every row, so the
+        # duplicate has to be one of its own symbols rather than GOOD_ROW's.
+        duplicate = GOOD_ROW.replace("HDFCBANK", "SYM0000").replace(
+            "INE040A01034", "INE040A00000")
+        with pytest.raises(UniverseParseError, match="duplicate"):
+            parse_csv(make_csv(500) + duplicate)
+
+    def test_skipping_does_not_rescue_a_short_file(self):
+        with pytest.raises(UniverseParseError, match="expected"):
+            parse_csv(make_csv(100) + self.DUMMY)
