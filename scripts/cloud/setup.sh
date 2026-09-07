@@ -135,11 +135,50 @@ RandomizedDelaySec=300
 WantedBy=timers.target
 UNIT
 
+# The intraday index poll. Separate from the nightly because it fails
+# differently and matters less: a missed poll costs one stale strip of index
+# levels, where a missed nightly costs a day of scoring.
+sudo tee /etc/systemd/system/n500-live.service >/dev/null <<UNIT
+[Unit]
+Description=Nifty 500 tracker — intraday index quotes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$USER
+WorkingDirectory=$REPO
+ExecStart=/bin/bash $REPO/scripts/poll-live.sh
+TimeoutStartSec=120
+UNIT
+
+sudo tee /etc/systemd/system/n500-live.timer >/dev/null <<'UNIT'
+[Unit]
+Description=Nifty 500 tracker — every 5 minutes during market hours
+
+[Timer]
+# Weekdays, daytime, every five minutes. The window is deliberately loose: the
+# job itself decides whether the market is open — it returns immediately and
+# makes no request when it is not — and keeping that decision in one place is
+# why the launchd version fired all day. This narrows the obviously pointless
+# wakeups without moving the rule about market hours into the scheduler.
+OnCalendar=Mon..Fri *-*-* 09..15:0/5:00
+# No Persistent here, unlike the nightly. A poll missed while the box was down
+# is a price from a moment that has passed; running it late would write a stale
+# quote and stamp it as current.
+Persistent=false
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target
+UNIT
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now n500-nightly.timer
+sudo systemctl enable --now n500-live.timer
 
 say "done"
-systemctl list-timers n500-nightly.timer --no-pager | head -3
+systemctl list-timers 'n500-*' --no-pager | head -4
 cat <<'NEXT'
 
   Useful from here:
