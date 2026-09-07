@@ -62,9 +62,16 @@ def main(argv: list[str] | None = None) -> int:
 
     db = Db(force_dry_run=args.dry_run)
 
-    prices = pd.DataFrame(db.select("prices_daily"))
-    if prices.empty:
-        print(f"[{JOB}] no prices found — run load_prices first", file=sys.stderr)
+    # Symbols first, prices one at a time below. Loading the whole price table
+    # cost about 450MB and then accumulating every output row as a dict before a
+    # single upsert cost several hundred more, for a peak of 1.4GB — fine on a
+    # laptop with 16GB and fatal on a 1GB server, where it swapped 1.2GB and
+    # crawled. Nothing here needs two symbols in memory at once.
+    symbols = sorted(
+        {r["symbol"] for r in db.select("stocks", "symbol")}
+    )
+    if not symbols:
+        print(f"[{JOB}] no symbols — run load_universe first", file=sys.stderr)
         return 1
 
     index_close = None
@@ -80,11 +87,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[{JOB}] no benchmark history — relative strength will be null",
               file=sys.stderr)
 
-    rows: list[dict] = []
+    written = 0
     with run(JOB, db=db) as log:
-        for symbol, group in prices.groupby("symbol", sort=True):
+        for symbol in symbols:
+            group = pd.DataFrame(db.select("prices_daily", where={"symbol": symbol}))
             if len(group) < MIN_BARS:
-                log.error(symbol, f"only {len(group)} bars, need {MIN_BARS}")
+                # Silent for a symbol with no prices at all: a company that left
+                # the index years ago has none, and 300 such errors a night
+                # would bury the ones that mean something.
+                if len(group):
+                    log.error(symbol, f"only {len(group)} bars, need {MIN_BARS}")
                 continue
 
             frame = adjusted_frame(group)
@@ -92,12 +104,17 @@ def main(argv: list[str] | None = None) -> int:
             if args.tail:
                 computed = computed.tail(args.tail)
 
-            symbol_rows = technicals.to_rows(symbol, computed)
-            rows.extend(symbol_rows)
+            # Written per symbol rather than collected. The rows for one symbol
+            # are a few thousand dicts; the rows for all of them were 773,051.
+            written += db.upsert(
+                "technicals_daily",
+                technicals.to_rows(symbol, computed),
+                on_conflict="symbol,date",
+            )
             log.symbols_ok += 1
 
-        log.rows_written = db.upsert("technicals_daily", rows, on_conflict="symbol,date")
-        log.notes = f"{log.symbols_ok} symbols, {len(rows)} rows"
+        log.rows_written = written
+        log.notes = f"{log.symbols_ok} symbols, {written} rows"
         summary = log.notes
 
     mode = "dry run" if db.dry_run else "Supabase"
