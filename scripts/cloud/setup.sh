@@ -35,6 +35,29 @@ say "timezone"
 sudo timedatectl set-timezone Asia/Kolkata
 echo "  now $(date '+%Y-%m-%d %H:%M %Z')"
 
+say "swap"
+# `compute_technicals` peaks at about 1.4GB — it holds every price row and then
+# builds a frame per symbol. The Always Free ARM shape has 24GB and does not
+# care; the x86 E2.1.Micro has 1GB and will be killed by the OOM reaper part way
+# through, which looks like a mysterious silent failure rather than a memory
+# problem. Swap is slow and that is fine: this runs once a night with nobody
+# waiting, and a job that takes forty minutes beats one that dies at twenty.
+TOTAL_MB=$(free -m | awk '/^Mem:/{print $2}')
+if [ "$TOTAL_MB" -lt 4000 ] && [ ! -f /swapfile ]; then
+  echo "  ${TOTAL_MB}MB of RAM — adding 4GB of swap"
+  sudo fallocate -l 4G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile >/dev/null
+  sudo swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+  # Prefer RAM until it genuinely runs out; the default of 60 starts swapping
+  # far too eagerly for a workload that is one big burst.
+  sudo sysctl -q vm.swappiness=10
+  grep -q '^vm.swappiness' /etc/sysctl.conf || echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf >/dev/null
+else
+  echo "  ${TOTAL_MB}MB of RAM, swap $( [ -f /swapfile ] && echo present || echo 'not needed' )"
+fi
+
 say "repository"
 if [ -d "$REPO/.git" ]; then
   git -C "$REPO" pull --ff-only

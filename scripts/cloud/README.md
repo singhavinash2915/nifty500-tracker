@@ -21,10 +21,35 @@ fixed at signup and cannot be changed afterwards. NSE and Screener treat Indian
 addresses better than American or European ones, and `preflight.sh` exists
 because that is the assumption most likely to be wrong.
 
-**Take the Ampere shape, `VM.Standard.A1.Flex.`** The free allowance is four ARM
-cores and 24 GB, which is far more than this needs; one core and 6 GB is ample
-and leaves room for a second instance. The x86 `E2.1.Micro` also works and is
-slower. Ubuntu 22.04 or 24.04, either is fine.
+**Take the Ampere shape, `VM.Standard.A1.Flex`, if you can get it.** The free
+allowance is four ARM cores and 24 GB; one core and 6 GB is ample here.
+
+You very likely cannot get it. *"Out of capacity for shape VM.Standard.A1.Flex"*
+is the normal answer in busy regions, and Mumbai and Hyderabad have a single
+availability domain, so the console's advice to try another one does not apply.
+Capacity does free up — retrying every few hours, and especially in the early
+morning IST, usually works within a day or two. It is worth a couple of days of
+retrying, because the alternative is worse in a specific way:
+
+**`VM.Standard.E2.1.Micro` is almost always available and has 1 GB of RAM.**
+`compute_technicals` peaks at **1.4 GB** — it holds every price row and then
+builds a frame per symbol — so on 1 GB it gets killed by the OOM reaper part way
+through, which presents as a silent mysterious failure rather than as a memory
+problem. `setup.sh` therefore adds 4 GB of swap on any box under 4 GB, and sets
+`vm.swappiness=10` so it prefers real memory until it genuinely runs out.
+
+That works. It is also slow — expect the nightly to take forty minutes or more
+instead of twenty. Nobody is waiting at 19:15, so this is an acceptable trade,
+and it is strictly better than a laptop that does not run at all.
+
+Ubuntu 22.04 or 24.04, either is fine.
+
+### If neither works
+
+A paid box in an Indian region, around ₹300–400 a month: AWS Lightsail Mumbai or
+DigitalOcean Bangalore at 1–2 GB. The Indian address matters more than the
+specification — see preflight below. European hosts like Hetzner are cheaper
+still and are exactly the addresses NSE is most likely to refuse.
 
 ## Then
 

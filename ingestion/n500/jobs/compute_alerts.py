@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 
@@ -86,7 +86,16 @@ def main(argv: list[str] | None = None) -> int:
     current, prior, today = snapshots(db)
     current = enrich_from_setups(db, current)
 
-    prices = pd.DataFrame(db.select("prices_daily"))
+    # Only the latest close per symbol is wanted, and reading the whole table
+    # for it costs 776,000 rows and about 450MB of resident memory. A fortnight
+    # covers any gap a holiday or a trading suspension can open.
+    prices = pd.DataFrame(
+        db.select(
+            "prices_daily",
+            columns="symbol,date,adj_close",
+            since=("date", (date.today() - timedelta(days=21)).isoformat()),
+        )
+    )
     closes: dict[str, float] = {}
     if not prices.empty:
         prices["date"] = pd.to_datetime(prices["date"])
