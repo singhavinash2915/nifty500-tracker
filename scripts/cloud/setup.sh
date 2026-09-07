@@ -94,7 +94,11 @@ fi
 echo "  present"
 
 say "connectivity"
-"$REPO/.venv/bin/python" -m n500.jobs.doctor 2>&1 | tail -20 || true
+# From ingestion/, because that is where the `n500` package lives. `nightly.sh`
+# already cds there itself, so this only ever broke the check and never the run
+# — which is the more annoying kind of bug, since it reports a failure that
+# is not there.
+(cd "$REPO/ingestion" && "$REPO/.venv/bin/python" -m n500.jobs.doctor 2>&1 | tail -22) || true
 
 say "systemd units"
 sudo tee /etc/systemd/system/n500-nightly.service >/dev/null <<UNIT
