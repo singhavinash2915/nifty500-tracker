@@ -52,6 +52,8 @@ export interface Candidate {
   /** Distance to the next resistance band, as a fraction of the price. */
   headroom: number | null
   stop_pct: number
+  /** Days the name has held its place on the list. */
+  days_on_list: number | null
   warnings: string[]
 }
 
@@ -87,8 +89,16 @@ export function buildShortlist({
     bySector.set(sector, (bySector.get(sector) ?? 0) + (p.value ?? 0))
   }
 
+  // Membership comes from the nightly job, not from re-ranking here. The list
+  // has a band — a name enters at rank 10 and leaves only once it falls past 25
+  // — and that needs to remember yesterday, which a browser cannot. Falling
+  // back to the ranking keeps the page working on a database that has not run
+  // the newer job yet.
+  const banded = rows.filter((r) => r.on_buylist)
+  const source = banded.length ? banded : rows
+
   const out: Candidate[] = []
-  for (const row of rows) {
+  for (const row of source) {
     if (out.length >= limit) break
     if (owned.has(row.symbol)) continue
     if (row.conviction === null) continue
@@ -146,6 +156,9 @@ export function buildShortlist({
       // held-out evidence says these get exceeded more often than they cap.
       headroom: plan.target && price ? plan.target / price - 1 : null,
       stop_pct: riskPerShare / price,
+      days_on_list: row.buylist_since
+        ? Math.round((Date.now() - new Date(row.buylist_since).getTime()) / 86_400_000)
+        : null,
       warnings,
     })
   }

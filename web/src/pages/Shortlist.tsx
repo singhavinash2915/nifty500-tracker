@@ -61,6 +61,9 @@ export function Shortlist({ rows }: { rows: ScreenerRow[] }) {
         Ranked by conviction — the composite fitted on 2023-24 and scored once on
         2025-26 — then sized so that being wrong costs one risk unit. Names you
         already own and businesses failing a hard gate are left out.
+        {' '}A name joins at rank 10 and stays until it falls past 25, so the list
+        does not empty and refill itself every night over a place or two of
+        movement.
       </p>
 
       {loading ? (
@@ -190,6 +193,14 @@ function CandidateCard({
         <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">
           {row.sector}
         </span>
+        {/* How long it has held its place. A name that has been on the list
+            for weeks is a different proposition from one that arrived today,
+            and the difference was invisible while the list churned nightly. */}
+        {c.days_on_list !== null && (
+          <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            {c.days_on_list === 0 ? 'new today' : `${c.days_on_list}d on list`}
+          </span>
+        )}
         <span className="ml-auto font-mono text-lg tabular-nums">
           {row.conviction?.toFixed(0)}
           <span className="ml-1 text-xs text-slate-500">conviction</span>

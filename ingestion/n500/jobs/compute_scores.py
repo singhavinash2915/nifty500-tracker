@@ -29,7 +29,7 @@ import pandas as pd
 
 from ..config import settings
 from ..db import Db, run
-from ..scoring import conviction, momentum, redflags
+from ..scoring import buylist, conviction, momentum, redflags
 from ..scoring.ranking import peer_groups
 
 JOB = "compute_scores"
@@ -122,6 +122,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     as_of = snapshot["date"].max().date()
+
+    # Read before scoring so yesterday's buy-list membership is available.
+    scores_history = pd.DataFrame(
+        db.select(
+            "scores_daily",
+            columns="symbol,date,on_buylist,buylist_since",
+            since=("date", (date.today() - timedelta(days=30)).isoformat()),
+        )
+    )
 
     fundamentals = pd.DataFrame(db.select("fundamental_scores"))
     q = pd.Series(np.nan, index=snapshot.index, dtype="float64")
@@ -264,6 +273,29 @@ def main(argv: list[str] | None = None) -> int:
                 pd.qcut(conv[conv.notna()].rank(method="first"), 10, labels=False) + 1
             ).astype("Int64")
 
+        # The buy list, with a band rather than a hard cut. A name enters at
+        # rank 10 and leaves only past 25, so ordinary jostling in the middle
+        # does not empty and refill the list every night. Yesterday's membership
+        # is read back so a survivor keeps the date it joined.
+        previous: dict[str, date] = {}
+        if not scores_history.empty:
+            prior = scores_history[scores_history["date"] < as_of.isoformat()]
+            if not prior.empty:
+                last_day = prior[prior["date"] == prior["date"].max()]
+                for _, row in last_day.iterrows():
+                    if row.get("on_buylist") and row.get("buylist_since"):
+                        previous[row["symbol"]] = date.fromisoformat(
+                            str(row["buylist_since"])[:10]
+                        )
+
+        eligible = conv.dropna().sort_values(ascending=False)
+        # A business excluded by a red flag is off the list outright, and a name
+        # already held is not a new idea — but that second test belongs to the
+        # browser, which knows the holdings. Here it is only the gates.
+        eligible = eligible[~excluded.reindex(eligible.index).fillna(False)]
+        members = buylist.apply_band(list(eligible.index), previous, as_of)
+        member_by = {m.symbol: m for m in members}
+
         sector_rank = (
             blended.groupby(groups).rank(ascending=False, method="min").astype("Int64")
         )
@@ -303,6 +335,13 @@ def main(argv: list[str] | None = None) -> int:
                         else bool(snapshot.at[symbol, "close"] > snapshot.at[symbol, "sma200"])
                     ),
                     "conviction": None if pd.isna(conv.loc[symbol]) else float(conv.loc[symbol]),
+                    "on_buylist": symbol in member_by,
+                    "buylist_since": (
+                        member_by[symbol].since.isoformat() if symbol in member_by else None
+                    ),
+                    "buylist_rank": (
+                        member_by[symbol].rank if symbol in member_by else None
+                    ),
                     "conviction_decile": (
                         None if pd.isna(conv_decile.loc[symbol])
                         else int(conv_decile.loc[symbol])
@@ -321,7 +360,8 @@ def main(argv: list[str] | None = None) -> int:
             f"{len(rows)} scored as of {as_of}; {support_wins} led by the "
             f"support setup; {int(excluded.sum())} excluded by a red flag "
             f"({thin} of them for turnover); {int(conv.notna().sum())} with a "
-            f"conviction score"
+            f"conviction score; {len(members)} on the buy list "
+            f"({sum(1 for m in members if m.is_new)} new)"
         )
         summary = log.notes
 

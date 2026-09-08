@@ -27,6 +27,10 @@ export interface ScreenerRow {
   /** The composite fitted on 2023-24 and validated once on 2025-26. */
   conviction: number | null
   conviction_decile: number | null
+  /** On the buy list, which enters at rank 10 and leaves only past 25. */
+  on_buylist: boolean
+  buylist_since: string | null
+  buylist_rank: number | null
   winning_setup: Setup
   setup_status: SetupStatus
   decile: number | null
