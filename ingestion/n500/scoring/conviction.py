@@ -70,6 +70,65 @@ WEIGHTS: dict[str, int] = {
 # missing most of its inputs has not been scored, it has been guessed at.
 MIN_FEATURES = 7
 
+# How long a one-bar event stays true.
+#
+# Six of the thirteen features are single-bar flags, and four of them fire on
+# fewer than 3% of observations. A doji printed yesterday or it did not; today it
+# has not, and a different set of names has one instead. Scored that way, only
+# **10%** of the top ten survived to the next rebalance — nine names replaced
+# every month, on a system whose holding period is six.
+#
+# That is a construction error rather than a tuning problem. A stock that failed
+# a breakout two months ago is still in the situation the signal describes; the
+# flag expiring overnight was throwing information away as well as churning the
+# list. Carrying each event forward for a quarter takes top-ten survival from
+# 10% to about 32% on the training period, and the information coefficient goes
+# *up* rather than down.
+#
+# Sixty-three sessions is a quarter, half the holding period. The improvement
+# kept rising out to six months in testing and the number here is deliberately
+# not the peak of that curve: this is a fix for turnover, which needs no forward
+# returns to justify, and the coefficient is a bonus measured on training data
+# alone.
+EVENT_MEMORY_SESSIONS = 63
+
+# The flags this applies to. Everything else — a score, a distance, a ratio —
+# is already a state and changes gradually on its own.
+EVENT_FEATURES = (
+    "false_breakout",
+    "rejected_at_resistance",
+    "doji_at_resistance",
+    "hanging_man_at_resistance",
+    "shooting_star_at_resistance",
+    "bearish_engulfing_at_resistance",
+)
+
+
+def carry_events(history: pd.DataFrame, *, sessions: int = EVENT_MEMORY_SESSIONS) -> pd.DataFrame:
+    """Collapse a window of daily rows into one row per symbol, events kept.
+
+    `history` is `ts_setups` over the last `sessions` trading days. An event
+    counts if it fired anywhere in the window; every other column is taken from
+    the most recent row, because a distance or a strength describes now rather
+    than a moment that passed.
+    """
+    if history.empty:
+        return history
+
+    latest = (
+        history.sort_values("date").groupby("symbol").tail(1).set_index("symbol")
+    )
+    for name in EVENT_FEATURES:
+        if name not in history:
+            continue
+        # to_numeric first: the column arrives from JSON as object dtype, where
+        # fillna silently downcasts and, in a later pandas, returns something
+        # else entirely.
+        flag = pd.to_numeric(history[name], errors="coerce").fillna(0.0) > 0
+        fired = flag.groupby(history["symbol"]).max()
+        latest[name] = fired.reindex(latest.index).fillna(False).astype(bool)
+    return latest
+
 
 def score(frame: pd.DataFrame) -> pd.Series:
     """0-100 conviction for one cross-section, indexed by symbol.

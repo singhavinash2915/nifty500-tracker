@@ -218,3 +218,63 @@ class TestPrices:
         old = (date.today() - timedelta(days=12)).isoformat()
         db = FakeDb(prices_daily=[{"symbol": "ABB", "date": old, "adj_close": 100.0}])
         assert not next(c for c in verify.check_prices(db) if "fresh" in c.name).ok
+
+
+class TestEventMemory:
+    """Carrying a one-bar flag forward.
+
+    Six of the composite's thirteen features are single-bar events and four fire
+    on under 3% of observations, so scored as instants only 10% of the top ten
+    survived to the next rebalance — nine names replaced a month, on a system
+    whose holding period is six. A stock that failed a breakout two months ago is
+    still in the situation the signal describes.
+    """
+
+    def frame(self, rows):
+        import pandas as pd
+        return pd.DataFrame(rows)
+
+    def test_an_event_from_an_earlier_bar_is_carried_forward(self):
+        from n500.scoring import conviction
+        out = conviction.carry_events(self.frame([
+            {"symbol": "ABB", "date": "2026-09-01", "false_breakout": True,
+             "headroom": 0.10},
+            {"symbol": "ABB", "date": "2026-09-08", "false_breakout": False,
+             "headroom": 0.04},
+        ]))
+        assert bool(out.loc["ABB", "false_breakout"]) is True
+
+    def test_a_state_is_taken_from_the_latest_bar_not_the_window(self):
+        # Distance to resistance describes now. Only events get memory.
+        from n500.scoring import conviction
+        out = conviction.carry_events(self.frame([
+            {"symbol": "ABB", "date": "2026-09-01", "false_breakout": True,
+             "headroom": 0.10},
+            {"symbol": "ABB", "date": "2026-09-08", "false_breakout": False,
+             "headroom": 0.04},
+        ]))
+        assert out.loc["ABB", "headroom"] == 0.04
+
+    def test_a_symbol_that_never_fired_stays_false(self):
+        from n500.scoring import conviction
+        out = conviction.carry_events(self.frame([
+            {"symbol": "ACC", "date": "2026-09-01", "false_breakout": False},
+            {"symbol": "ACC", "date": "2026-09-08", "false_breakout": False},
+        ]))
+        assert bool(out.loc["ACC", "false_breakout"]) is False
+
+    def test_memory_does_not_leak_between_symbols(self):
+        from n500.scoring import conviction
+        out = conviction.carry_events(self.frame([
+            {"symbol": "ABB", "date": "2026-09-01", "false_breakout": True},
+            {"symbol": "ACC", "date": "2026-09-01", "false_breakout": False},
+            {"symbol": "ABB", "date": "2026-09-08", "false_breakout": False},
+            {"symbol": "ACC", "date": "2026-09-08", "false_breakout": False},
+        ]))
+        assert bool(out.loc["ABB", "false_breakout"]) is True
+        assert bool(out.loc["ACC", "false_breakout"]) is False
+
+    def test_an_empty_window_is_returned_unchanged(self):
+        import pandas as pd
+        from n500.scoring import conviction
+        assert conviction.carry_events(pd.DataFrame()).empty

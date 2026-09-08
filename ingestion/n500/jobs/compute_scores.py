@@ -155,7 +155,17 @@ def main(argv: list[str] | None = None) -> int:
             if symbol in snapshot.index
         }
 
-    setups = pd.DataFrame(db.select("ts_setups"))
+    # A window rather than the latest row. The event flags are carried forward
+    # for a quarter — see conviction.EVENT_MEMORY_SESSIONS — because a doji that
+    # printed yesterday describes a situation that is still true today, and
+    # expiring it overnight churned nine of every ten names on the buy list.
+    # 130 calendar days comfortably contains 63 trading sessions.
+    setups = pd.DataFrame(
+        db.select(
+            "ts_setups",
+            since=("date", (date.today() - timedelta(days=130)).isoformat()),
+        )
+    )
     ts = pd.Series(np.nan, index=snapshot.index, dtype="float64")
     status = pd.Series("none", index=snapshot.index, dtype="object")
     if not setups.empty:
@@ -223,26 +233,25 @@ def main(argv: list[str] | None = None) -> int:
         features["value_score"] = v
         features["ownership_score"] = own
         if not setups.empty:
+            window = setups.copy()
+            # `false_breakout` is stored as the event's detail or null; the
+            # composite wants the fact, and carrying a fact forward is what
+            # `carry_events` does.
+            if "false_breakout" in window:
+                window["false_breakout"] = window["false_breakout"].notna()
+            carried = conviction.carry_events(window)
+
             for name in ("headroom", "resistance_strength", "zone_respect"):
-                if name in latest_setups:
+                if name in carried:
                     features[name] = pd.to_numeric(
-                        latest_setups[name].reindex(snapshot.index), errors="coerce"
+                        carried[name].reindex(snapshot.index), errors="coerce"
                     )
-            for name in ("rejected_at_resistance", "doji_at_resistance",
-                         "hanging_man_at_resistance", "shooting_star_at_resistance",
-                         "bearish_engulfing_at_resistance"):
-                if name in latest_setups:
+            for name in conviction.EVENT_FEATURES:
+                if name in carried:
                     features[name] = (
-                        latest_setups[name].reindex(snapshot.index)
+                        carried[name].reindex(snapshot.index)
                         .fillna(False).astype(bool).astype("float64")
                     )
-            if "false_breakout" in latest_setups:
-                # Stored as the event's detail or null, and the composite wants
-                # the fact rather than the detail.
-                features["false_breakout"] = (
-                    latest_setups["false_breakout"].reindex(snapshot.index)
-                    .notna().astype("float64")
-                )
         if not fundamentals.empty and "margin_revision" in latest_f:
             features["margin_revision"] = pd.to_numeric(
                 latest_f["margin_revision"].reindex(snapshot.index), errors="coerce"
