@@ -649,6 +649,47 @@ export async function loadRunHealth(): Promise<RunHealth | null> {
   }
 }
 
+/**
+ * RSI divergence for one symbol, on both timeframes.
+ *
+ * Shown, never ranked on. Measured over the training period the daily bullish
+ * case — the textbook "lower low, higher RSI, buy the reversal" — scored an
+ * information coefficient of -0.019 at t -2.46, which is the opposite of the
+ * claim, and the weekly variants fire on well under 1% of observations. It is
+ * here to be looked at by somebody who wants to look at it, and nothing in the
+ * score reads it.
+ */
+export interface Divergence {
+  bullish_daily: boolean
+  bearish_daily: boolean
+  bullish_weekly: boolean
+  bearish_weekly: boolean
+}
+
+export async function loadDivergence(): Promise<Map<string, Divergence>> {
+  const out = new Map<string, Divergence>()
+  if (!supabase) return out
+
+  const { data, error } = await supabase
+    .from('ts_setups')
+    .select('symbol,date,rsi_div_bullish_daily,rsi_div_bearish_daily,rsi_div_bullish_weekly,rsi_div_bearish_weekly')
+    .order('date', { ascending: false })
+    .limit(1000)
+  if (error || !data?.length) return out
+
+  const latest = data[0].date
+  for (const r of data) {
+    if (r.date !== latest || out.has(r.symbol)) continue
+    out.set(r.symbol, {
+      bullish_daily: Boolean(r.rsi_div_bullish_daily),
+      bearish_daily: Boolean(r.rsi_div_bearish_daily),
+      bullish_weekly: Boolean(r.rsi_div_bullish_weekly),
+      bearish_weekly: Boolean(r.rsi_div_bearish_weekly),
+    })
+  }
+  return out
+}
+
 /** The overhead read for one symbol: nearest resistance and how price behaved at it. */
 export interface Overhead {
   floor: number | null

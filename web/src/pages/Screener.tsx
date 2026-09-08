@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowUpDown, Search } from 'lucide-react'
 import type { ScreenerRow, Weights } from '../types'
 import { DEFAULT_WEIGHTS } from '../types'
 import { funnel, isExcluded, pickTechnical, reblend, winningSetup } from '../lib/scoring'
 import { pct } from '../lib/format'
+import { loadDivergence, type Divergence } from '../lib/load'
 import { MarketStrip } from '../components/MarketStrip'
 
 type SortKey =
@@ -15,6 +16,18 @@ type View = 'all' | 'support' | 'excluded'
 export function Screener({ rows }: { rows: ScreenerRow[] }) {
   const [weights, setWeights] = useState<Weights>(DEFAULT_WEIGHTS)
   const [sort, setSort] = useState<SortKey>('conviction')
+  // Shown, never ranked on. See loadDivergence — the daily bullish case
+  // measured at t -2.46, the opposite of what the pattern is famous for, so it
+  // is a column somebody can look at rather than an input to the score.
+  const [divergence, setDivergence] = useState<Map<string, Divergence>>(new Map())
+
+  useEffect(() => {
+    let cancelled = false
+    loadDivergence().then((d) => !cancelled && setDivergence(d))
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const [asc, setAsc] = useState(false)
   const [query, setQuery] = useState('')
   const [sector, setSector] = useState('all')
@@ -185,6 +198,7 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
               <span>R {row.revision_score?.toFixed(0) ?? '—'}</span>
               <span>O {row.ownership_score?.toFixed(0) ?? '—'}</span>
               <span>T {technical?.toFixed(0) ?? '—'}</span>
+              <DivergenceMark d={divergence.get(row.symbol)} />
               <span className={
                 row.mom_12_1 !== null && row.mom_12_1 >= 0
                   ? 'text-emerald-700 dark:text-emerald-400'
@@ -216,6 +230,7 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
               <Th right onClick={() => toggleSort('revision_score')} active={sort === 'revision_score'}>R</Th>
               <Th right onClick={() => toggleSort('ownership_score')} active={sort === 'ownership_score'}>O</Th>
               <Th right onClick={() => toggleSort('technical')} active={sort === 'technical'}>Tech</Th>
+              <th className="px-3 py-2" title="RSI divergence — shown, not scored">Div</th>
               <th className="px-3 py-2">Setup</th>
               <Th right onClick={() => toggleSort('mom_12_1')} active={sort === 'mom_12_1'}>12-1 mom</Th>
             </tr>
@@ -254,6 +269,9 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
                 <Num value={row.revision_score} />
                 <Num value={row.ownership_score} />
                 <Num value={technical} />
+                <td className="px-3 py-2">
+                  <DivergenceMark d={divergence.get(row.symbol)} />
+                </td>
                 <td className="px-3 py-2 text-xs">
                   {setup === 'support' ? (
                     <span className="rounded bg-sky-100 px-1.5 py-0.5 text-sky-800 dark:bg-sky-950 dark:text-sky-300">
@@ -412,6 +430,41 @@ function ScoreChip({ value, capped }: { value: number | null; capped: boolean })
     <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-mono text-xs font-semibold tabular-nums ${tone}`}>
       {capped && <span title="below its 200DMA — T-M capped">&bull;</span>}
       {value.toFixed(1)}
+    </span>
+  )
+}
+
+
+/**
+ * RSI divergence, as a mark rather than a score.
+ *
+ * Deliberately quiet: it is not in the ranking and measured over the training
+ * period the daily bullish case reads t -2.46, the opposite of the textbook
+ * claim. A weekly divergence is rarer and drawn heavier for that reason alone —
+ * scarcity, not proven strength.
+ */
+function DivergenceMark({ d }: { d?: Divergence }) {
+  if (!d) return null
+  const bull = d.bullish_weekly || d.bullish_daily
+  const bear = d.bearish_weekly || d.bearish_daily
+  if (!bull && !bear) return null
+
+  const weekly = d.bullish_weekly || d.bearish_weekly
+  const label = `${bull ? 'bullish' : 'bearish'} RSI divergence, ${
+    weekly ? 'weekly' : 'daily'
+  } — shown for interest; it is not part of the score`
+
+  return (
+    <span
+      title={label}
+      className={`font-mono text-[11px] ${weekly ? 'font-bold' : ''} ${
+        bull
+          ? 'text-emerald-700 dark:text-emerald-400'
+          : 'text-red-700 dark:text-red-400'
+      }`}
+    >
+      {bull ? '▲' : '▼'}
+      {weekly ? 'W' : 'D'}
     </span>
   )
 }

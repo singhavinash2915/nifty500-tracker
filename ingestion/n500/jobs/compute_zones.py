@@ -21,7 +21,7 @@ import pandas as pd
 from .. import indicators as ind
 from ..db import Db, run
 from ..scoring import plan, support
-from ..zones import candles, reversal
+from ..zones import candles, divergence, reversal
 from ..zones.build import build_zones, live_zones_above, live_zones_below
 from ..zones.pivots import find_pivots
 from .compute_technicals import MIN_BARS, adjusted_frame
@@ -160,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
                 continue
 
             try:
-                setup, zones = _evaluate_symbol(
+                setup, zones, diverged = _evaluate_symbol(
                     daily,
                     weekly,
                     quality_gate=quality_gate,
@@ -231,6 +231,7 @@ def main(argv: list[str] | None = None) -> int:
                     "zone_timeframe": setup.zone.timeframe if setup.zone else None,
                     **suggested,
                     **overhead,
+                    **diverged,
                 }
             )
             log.symbols_ok += 1
@@ -404,6 +405,23 @@ def _evaluate_symbol(
         timeframe="daily",
     )
 
+    # RSI divergence, both directions and both timeframes. Reported, never
+    # scored — see migration 0022: measured on the training period the daily
+    # bullish case reads IC -0.019 at t -2.46, which is the opposite of the
+    # textbook claim, and the weekly variants fire too rarely to say anything.
+    weekly_rsi = ind.rsi(weekly["close"], 14)
+    weekly_index = len(weekly) - 1
+    diverged = {
+        "rsi_div_bullish_daily": divergence.active(
+            daily, rsi, index, kind="bullish", timeframe="daily"),
+        "rsi_div_bearish_daily": divergence.active(
+            daily, rsi, index, kind="bearish", timeframe="daily"),
+        "rsi_div_bullish_weekly": divergence.active(
+            weekly, weekly_rsi, weekly_index, kind="bullish", timeframe="weekly"),
+        "rsi_div_bearish_weekly": divergence.active(
+            weekly, weekly_rsi, weekly_index, kind="bearish", timeframe="weekly"),
+    }
+
     setup = support.evaluate(
         frame=daily,
         index=index,
@@ -418,7 +436,7 @@ def _evaluate_symbol(
         quality_gate=quality_gate,
         hard_excluded=hard_excluded,
     )
-    return setup, {"daily": daily_zones, "weekly": weekly_zones}
+    return setup, {"daily": daily_zones, "weekly": weekly_zones}, diverged
 
 
 if __name__ == "__main__":
