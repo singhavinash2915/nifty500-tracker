@@ -36,7 +36,7 @@ from .. import indicators as ind
 from .. import technicals as tech
 from ..scoring import momentum, ownership, quality, redflags, revision, support, value
 from ..scoring.ranking import peer_groups
-from ..zones import candles, reversal
+from ..zones import candles, divergence, reversal
 from ..zones.build import (
     Zone,
     build_zones,
@@ -474,8 +474,34 @@ def _overhead_at(history: SymbolHistory, index: int, price: float) -> dict:
     for name in candles.PANEL_FEATURES:
         patterns.setdefault(name, 0.0)
 
+    # RSI divergence, both directions, on both timeframes. Recorded rather than
+    # scored: it is the most widely believed pattern in technical analysis and
+    # among the least carefully measured, and this project has already had two
+    # confident hypotheses come back inverted.
+    diverged = {}
+    for kind in ("bullish", "bearish"):
+        diverged[f"rsi_div_{kind}_daily"] = float(
+            divergence.active(history.daily, history.rsi, index,
+                              kind=kind, timeframe="daily", pivots=history.pivots)
+        )
+
+    weekly_index = int(
+        history.weekly.index.searchsorted(history.daily.index[index], side="right") - 1
+    )
+    if weekly_index >= 30:
+        weekly_rsi = ind.rsi(history.weekly["close"], 14)
+        for kind in ("bullish", "bearish"):
+            diverged[f"rsi_div_{kind}_weekly"] = float(
+                divergence.active(history.weekly, weekly_rsi, weekly_index,
+                                  kind=kind, timeframe="weekly")
+            )
+    else:
+        diverged["rsi_div_bullish_weekly"] = 0.0
+        diverged["rsi_div_bearish_weekly"] = 0.0
+
     return {
         **patterns,
+        **diverged,
         # Rated at this bar, not at the end of the frame. `zone.strength` was
         # computed once over the whole history when the zones were built, so
         # reading it here would tell a January rebalance how the level behaved

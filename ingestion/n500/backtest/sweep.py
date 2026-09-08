@@ -167,6 +167,13 @@ FEATURES: dict[str, int] = {
     "doji_at_resistance": -1,
     "bearish_engulfing_at_resistance": -1,
     "dark_cloud_at_resistance": -1,
+    # RSI divergence, signed the textbook way: bullish should predict up,
+    # bearish down. Both timeframes, because "daily or weekly" was the question
+    # and they may well disagree.
+    "rsi_div_bullish_daily": +1,
+    "rsi_div_bearish_daily": -1,
+    "rsi_div_bullish_weekly": +1,
+    "rsi_div_bearish_weekly": -1,
 }
 
 
