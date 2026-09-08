@@ -219,10 +219,6 @@ def _move_stop(db: Db, args, existing: list[dict]) -> int:
     return 0
 
 
-def _next_id(rows: list[dict]) -> int:
-    return max((int(r.get("id") or 0) for r in rows), default=0) + 1
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Record and close positions")
     parser.add_argument(
@@ -298,8 +294,13 @@ def main(argv: list[str] | None = None) -> int:
                   file=sys.stderr)
             return 1
 
+        # No id. It used to compute max(existing) + 1 and insert that, which
+        # never advances the sequence behind the column — so `positions` reached
+        # id 7 while its sequence sat at 3, and the first insert from the
+        # browser, which correctly omits the id, was handed 4 and collided with
+        # a row already there. The database is the only thing that should be
+        # deciding these.
         row = {
-            "id": _next_id(existing),
             "symbol": symbol,
             "entry_date": when.isoformat(),
             "entry_price": args.price,
@@ -313,7 +314,10 @@ def main(argv: list[str] | None = None) -> int:
             "exit_reason": None,
         }
         with run(JOB, db=db) as log:
-            log.rows_written = db.upsert("positions", [row], on_conflict="id")
+            # Insert rather than upsert: with no id there is nothing to conflict
+            # on, and an upsert keyed on a column the row does not carry would
+            # quietly become an insert anyway.
+            log.rows_written = db.insert("positions", [row])
             log.symbols_ok = 1
             risk = (args.price - args.stop) * args.qty
             log.notes = f"opened {symbol}, risking {risk:.0f}"

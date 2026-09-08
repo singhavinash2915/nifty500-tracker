@@ -333,6 +333,22 @@ class Db:
                 return rows
             cursor = {column: page[-1][column] for column in order_by}
 
+    def insert(self, table: str, rows: Sequence[dict[str, Any]]) -> int:
+        """Plain insert, for rows whose primary key the database assigns.
+
+        Distinct from `upsert` on purpose. An upsert keyed on `id` for a row
+        that carries no id quietly becomes an insert, which works until someone
+        reads the call and believes the conflict key means something.
+        """
+        rows = list(rows)
+        if not rows:
+            return 0
+        if self.dry_run:
+            self._dry_run_upsert(table, rows, on_conflict=None)
+            return len(rows)
+        self._client.table(table).insert(rows).execute()
+        return len(rows)
+
     def count(self, table: str) -> int:
         """How many rows, without fetching any of them.
 
