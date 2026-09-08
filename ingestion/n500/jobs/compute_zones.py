@@ -93,9 +93,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     db = Db(force_dry_run=args.dry_run)
-    prices = pd.DataFrame(db.select("prices_daily"))
-    if prices.empty:
-        print(f"[{JOB}] no prices — run load_prices first", file=sys.stderr)
+
+    # Symbols first, prices per symbol inside the loop. Reading the whole table
+    # was 776,300 rows and about 450MB, and on the server it crossed the
+    # statement timeout after fourteen minutes and took the run down with it —
+    # the same shape of failure `compute_technicals` had, in the next job along.
+    symbols = sorted({r["symbol"] for r in db.select("stocks", "symbol")})
+    if not symbols:
+        print(f"[{JOB}] no symbols — run load_universe first", file=sys.stderr)
         return 1
 
     # The fundamentals gate: a weak business at support is a cheaper weak
@@ -129,9 +134,11 @@ def main(argv: list[str] | None = None) -> int:
     setup_rows: list[dict] = []
 
     with run(JOB, db=db) as log:
-        for symbol, group in prices.groupby("symbol", sort=True):
+        for symbol in symbols:
             if wanted and symbol not in wanted:
                 continue
+
+            group = pd.DataFrame(db.select("prices_daily", where={"symbol": symbol}))
             if len(group) < MIN_BARS:
                 continue
 

@@ -169,15 +169,30 @@ def check_plans(db: Db) -> list[Check]:
         return [Check("plans exist", False, "ts_setups has no recent rows", fatal=False)]
 
     today = _latest(setups)
+    # Against the close on the plan's *own* date, not the latest close.
+    #
+    # This check failed on 8 September saying 33 targets were below their price,
+    # and it was wrong. The zones job had failed the night before, so the plans
+    # were dated the 7th while prices had moved on to the 8th — and a target set
+    # above yesterday's close is often below today's, which is what a market
+    # doing its job looks like rather than a corrupted table.
+    #
+    # The banner it drove said "the output is wrong, not merely stale", which is
+    # precisely the distinction this file exists to make and precisely the one it
+    # got backwards. An invariant that cannot tell staleness from corruption is
+    # worse than no invariant, because it spends the alarm on the wrong thing.
+    plan_date = str(today["date"].iloc[0])[:10]
     prices = pd.DataFrame(
         db.select(
             "prices_daily",
             columns="symbol,date,adj_close",
-            since=("date", (date.today() - timedelta(days=14)).isoformat()),
+            since=("date", plan_date),
         )
     )
+    if len(prices):
+        prices = prices[prices["date"].astype(str).str[:10] == plan_date]
     last = (
-        prices.sort_values("date").groupby("symbol").tail(1).set_index("symbol")["adj_close"]
+        prices.set_index("symbol")["adj_close"]
         if len(prices) else pd.Series(dtype="float64")
     )
 
@@ -208,7 +223,26 @@ def check_plans(db: Db) -> list[Check]:
             len(usable) >= len(today) * 0.8,
             f"{len(usable)} of {len(today)} have a usable stop",
         ),
+        # Staleness, reported as staleness. A plan older than the newest price
+        # is not wrong — it is yesterday's — and the difference decides whether
+        # the banner tells somebody to stop or merely to look.
+        Check(
+            "plans are as fresh as prices",
+            _plans_are_current(db, plan_date),
+            f"plans are dated {plan_date}",
+            fatal=False,
+        ),
     ]
+
+
+def _plans_are_current(db: Db, plan_date: str) -> bool:
+    rows = db.select(
+        "prices_daily",
+        columns="symbol,date",
+        since=("date", plan_date),
+    )
+    newest = max((str(r["date"])[:10] for r in rows), default=plan_date)
+    return newest <= plan_date
 
 
 def check_positions(db: Db) -> list[Check]:

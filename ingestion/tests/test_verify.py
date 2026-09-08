@@ -125,11 +125,12 @@ class TestPlans:
     def named(self, checks, name):
         return next(c for c in checks if c.name == name)
 
-    def frame(self, stop, target=None, close=100.0):
+    def frame(self, stop, target=None, close=100.0, price_date=None):
         return FakeDb(
             ts_setups=[{"symbol": "ABB", "date": today(),
                         "plan_stop": stop, "plan_target": target}],
-            prices_daily=[{"symbol": "ABB", "date": today(), "adj_close": close}],
+            prices_daily=[{"symbol": "ABB", "date": price_date or today(),
+                           "adj_close": close}],
         )
 
     def test_a_stop_above_the_price_fails(self):
@@ -145,6 +146,45 @@ class TestPlans:
         # The bug the plan tests caught: a support zone handed over as a target.
         checks = verify.check_plans(self.frame(stop=94.0, target=90.0))
         assert not self.named(checks, "every target is above its price").ok
+
+    def test_a_plan_is_judged_against_its_own_date_not_the_latest_price(self):
+        """Where this check went wrong on 8 September.
+
+        The zones job had failed the night before, so plans were dated the 7th
+        while prices had reached the 8th. A target set above yesterday's close
+        is frequently below today's — which is a market moving, not a corrupted
+        table — and the check reported 33 failures and drove a banner saying
+        "the output is wrong, not merely stale". Telling those two apart is the
+        entire job of this file.
+        """
+        db = FakeDb(
+            ts_setups=[{"symbol": "ABB", "date": "2026-09-07",
+                        "plan_stop": 94.0, "plan_target": 110.0}],
+            prices_daily=[
+                {"symbol": "ABB", "date": "2026-09-07", "adj_close": 100.0},
+                # A 15% day. The target is now below the price and the stop is
+                # still below it, and neither fact says anything is broken.
+                {"symbol": "ABB", "date": "2026-09-08", "adj_close": 115.0},
+            ],
+        )
+        checks = verify.check_plans(db)
+        assert self.named(checks, "every target is above its price").ok
+        assert self.named(checks, "every stop is below its price").ok
+
+    def test_a_stale_plan_is_reported_as_staleness(self):
+        # Reported, but not fatal: yesterday's plan is old, not wrong, and the
+        # banner should say look rather than stop.
+        db = FakeDb(
+            ts_setups=[{"symbol": "ABB", "date": "2026-09-07",
+                        "plan_stop": 94.0, "plan_target": 110.0}],
+            prices_daily=[
+                {"symbol": "ABB", "date": "2026-09-07", "adj_close": 100.0},
+                {"symbol": "ABB", "date": "2026-09-08", "adj_close": 101.0},
+            ],
+        )
+        stale = self.named(verify.check_plans(db), "plans are as fresh as prices")
+        assert not stale.ok
+        assert not stale.fatal, "staleness must not read as corruption"
 
 
 class TestPositions:
