@@ -217,12 +217,40 @@ class Db:
             return len(rows)
 
         touched = sorted({row[key] for row in rows if row.get(key) is not None})
-        for start in range(0, len(touched), 200):
-            chunk = touched[start : start + 200]
+        self.replace_keys(table, touched, rows, key=key)
+        return len(rows)
+
+    def replace_keys(
+        self,
+        table: str,
+        keys: Sequence[Any],
+        rows: Sequence[dict[str, Any]],
+        *,
+        key: str,
+        delete_chunk: int = 25,
+        insert_chunk: int = 500,
+    ) -> int:
+        """Delete every row for `keys`, then insert `rows`.
+
+        Split from `replace` so a caller can write as it goes instead of holding
+        the whole table in memory and sending it in one burst. `compute_zones`
+        did the latter — 58,244 rows deleted 200 symbols at a time — and the
+        deletes crossed the statement timeout on the server while completing
+        fine on a laptop. Twenty-five keys a statement is small enough that the
+        bound does not depend on how much history has accumulated.
+
+        Deleting is unconditional on the keys given, not on the rows: a symbol
+        that produced no zones this run must still lose the ones it had, or the
+        table keeps bands the current engine would never draw.
+        """
+        keys = list(keys)
+        for start in range(0, len(keys), delete_chunk):
+            chunk = keys[start : start + delete_chunk]
             self._client.table(table).delete().in_(key, chunk).execute()
 
-        for start in range(0, len(rows), 500):
-            self._client.table(table).insert(rows[start : start + 500]).execute()
+        rows = list(rows)
+        for start in range(0, len(rows), insert_chunk):
+            self._client.table(table).insert(rows[start : start + insert_chunk]).execute()
         return len(rows)
 
     def update_where_in(

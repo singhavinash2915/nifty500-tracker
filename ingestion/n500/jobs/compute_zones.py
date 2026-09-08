@@ -130,8 +130,19 @@ def main(argv: list[str] | None = None) -> int:
         {s.strip().upper() for s in args.symbols.split(",")} if args.symbols else None
     )
 
+    # Written in batches as the loop runs rather than accumulated. 58,244 zone
+    # rows sent in one burst crossed the server's statement timeout, and holding
+    # them all costs memory the 1GB box does not have.
+    FLUSH_EVERY = 40
     zone_rows: list[dict] = []
     setup_rows: list[dict] = []
+    pending_symbols: list[str] = []
+    # Running totals. The per-batch lists are emptied on every flush, so counting
+    # them at the end reports the last forty symbols and calls it the run — which
+    # is what the first version of this did, announcing 2,795 zones and no setups
+    # while writing 58,244 and 704 of them correctly.
+    written = 0
+    tally = {"scored": 0, "triggered": 0, "watching": 0}
 
     with run(JOB, db=db) as log:
         for symbol in symbols:
@@ -223,24 +234,56 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
             log.symbols_ok += 1
+            pending_symbols.append(symbol)
 
-        # Replaced, not upserted: zones are wholly recomputed each run and the
-        # table has no natural key, so upserting appends stale geometry.
-        log.rows_written = db.replace("support_zones", zone_rows, key="symbol")
-        db.upsert("ts_setups", setup_rows, on_conflict="symbol,date")
+            if len(pending_symbols) >= FLUSH_EVERY:
+                written += _flush(db, pending_symbols, zone_rows, setup_rows)
+                _tally(tally, setup_rows)
+                pending_symbols, zone_rows, setup_rows = [], [], []
 
-        scored = sum(1 for r in setup_rows if r["ts_score"] is not None)
-        triggered = sum(1 for r in setup_rows if r["setup_status"] == "triggered")
-        watching = sum(1 for r in setup_rows if r["setup_status"] == "watching")
+        written += _flush(db, pending_symbols, zone_rows, setup_rows)
+        _tally(tally, setup_rows)
+        log.rows_written = written
+
         log.notes = (
-            f"{len(zone_rows)} zones, {scored} setups scored "
-            f"({triggered} triggered, {watching} watching)"
+            f"{written} zones, {tally['scored']} setups scored "
+            f"({tally['triggered']} triggered, {tally['watching']} watching)"
         )
         summary = log.notes
 
     mode = "dry run" if db.dry_run else "Supabase"
     print(f"[{JOB}] {summary} ({mode})")
     return 0
+
+
+def _tally(totals: dict[str, int], setup_rows: list[dict]) -> None:
+    """Fold one batch into the running totals before the batch is discarded."""
+    totals["scored"] += sum(1 for r in setup_rows if r["ts_score"] is not None)
+    totals["triggered"] += sum(1 for r in setup_rows if r["setup_status"] == "triggered")
+    totals["watching"] += sum(1 for r in setup_rows if r["setup_status"] == "watching")
+
+
+def _flush(
+    db: Db, symbols: list[str], zone_rows: list[dict], setup_rows: list[dict]
+) -> int:
+    """Write one batch of symbols and forget it.
+
+    Zones are *replaced* rather than upserted: they are wholly recomputed every
+    run and the table has no natural key, so upserting appends stale geometry —
+    the count once climbed from 9,045 to 11,841 across two runs and the chart
+    drew a band spanning 16% of price that the current engine would never
+    produce.
+
+    The symbol list is passed separately from the rows on purpose. A symbol that
+    produced no zones this run must still lose the ones it had, and deleting
+    only where there are rows to insert would leave them behind for good.
+    """
+    if not symbols:
+        return 0
+    db.replace_keys("support_zones", symbols, zone_rows, key="symbol")
+    if setup_rows:
+        db.upsert("ts_setups", setup_rows, on_conflict="symbol,date")
+    return len(zone_rows)
 
 
 def _plan(daily: pd.DataFrame, zones: list) -> dict:
