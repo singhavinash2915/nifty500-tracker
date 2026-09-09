@@ -44,7 +44,10 @@ notify() {
 
 {
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') starting ==="
-  "$REPO/.venv/bin/python" -m n500.jobs.run_nightly --days 10 $EXTRA
+  # Unbuffered: redirected to a file, Python buffers stdout in 8KB blocks,
+  # so a run in progress shows nothing and a run that hangs shows nothing
+  # about where. The log is for watching, which needs it written as it goes.
+  PYTHONUNBUFFERED=1 "$REPO/.venv/bin/python" -m n500.jobs.run_nightly --days 10 $EXTRA
   STATUS=$?
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') exit $STATUS ==="
 } >> "$LOG" 2>&1
