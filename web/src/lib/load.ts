@@ -39,19 +39,32 @@ export async function loadScreener(): Promise<{
 }> {
   if (supabase) {
     try {
+      // Ask which day is current, then read only that day. Fetching a
+      // thousand rows ordered by date and filtering client-side downloaded
+      // 881KB to use 495 rows of it — half the payload was yesterday's
+      // ranking, discarded on arrival. It was also one row of universe growth
+      // away from breaking: PostgREST caps a response at 1000 rows without
+      // saying so, and the truncation would have silently cut the bottom off
+      // the screener.
+      const { data: head, error: headError } = await supabase
+        .from('scores_daily')
+        .select('date')
+        .order('date', { ascending: false })
+        .limit(1)
+      if (headError) throw new Error(headError.message)
+
+      const latest = head?.[0]?.date as string | undefined
+      if (!latest) throw new Error('no scored rows')
+
       const { data, error } = await supabase
         .from('scores_daily')
         .select('*, stocks(company_name, sector, company_type)')
-        .order('date', { ascending: false })
+        .eq('date', latest)
         .order('blended', { ascending: false, nullsFirst: false })
-        .limit(1000)
 
       if (error) throw new Error(error.message)
       if (data?.length) {
-        const latest = data[0].date as string
-        const rows = data
-          .filter((r) => r.date === latest)
-          .map(toScreenerRow)
+        const rows = data.map(toScreenerRow)
         return { snapshot: { as_of: latest, rows }, source: 'supabase', error: null }
       }
     } catch (e) {
