@@ -20,6 +20,18 @@ const FETCH_BARS = 760
  * needs the same range-based paging the Python side does, ordered, or it will
  * silently return a prefix.
  */
+
+/**
+ * An ISO date `days` ago, for bounding reads that only want the newest row.
+ *
+ * Every one of these queries takes the first row per symbol and discards the
+ * rest, so fetching the full history was paying egress for data that was thrown
+ * away on arrival — which is how a 5GB monthly allowance went at 127%.
+ */
+function recentDate(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10)
+}
+
 export async function loadScreener(): Promise<{
   snapshot: ScreenerSnapshot
   source: 'supabase' | 'snapshot'
@@ -270,12 +282,21 @@ export async function loadPortfolio(): Promise<{
 
       const symbols = [...new Set(rows.map((r) => r.symbol as string))]
       const [scores, prices, setups] = await Promise.all([
+        // Bounded, and it has to be. Unfiltered this asks for every score row
+        // these symbols ever had — years of daily history to display one number
+        // each — and PostgREST answers with its first 1000 rows and no error,
+        // so it was correct only for as long as the holdings stayed few.
         supabase.from('scores_daily').select('*').in('symbol', symbols)
-          .order('date', { ascending: false }),
+          .gte('date', recentDate(90))
+          .order('date', { ascending: false })
+          .limit(symbols.length * 5),
         supabase.from('prices_daily').select('symbol,date,adj_close').in('symbol', symbols)
           .order('date', { ascending: false }).limit(symbols.length * 5),
         supabase.from('ts_setups').select('*')
-          .in('symbol', symbols).order('date', { ascending: false }),
+          .in('symbol', symbols)
+          .gte('date', recentDate(90))
+          .order('date', { ascending: false })
+          .limit(symbols.length * 5),
       ])
 
       const firstBy = <T extends { symbol: string }>(list: T[] | null) => {
