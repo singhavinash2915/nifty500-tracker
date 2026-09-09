@@ -3,3 +3,9 @@ httpx==0.28.1
 python-dotenv==1.0.1
 pandas==2.3.3
 numpy==2.2.6
+# Screener.in's HTML. Undeclared until the cloud box tried to run the
+# fundamentals scraper and failed on `No module named 'bs4'` every night —
+# tolerated by the pipeline, so it never surfaced as a failure, only as
+# fundamentals that quietly stopped updating.
+beautifulsoup4==4.15.0
+lxml==6.1.3
