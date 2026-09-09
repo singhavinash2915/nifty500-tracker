@@ -23,13 +23,18 @@ from ..db import Db, run
 from ..jobs.compute_technicals import adjusted_frame
 from ..jobs.compute_zones import to_weekly
 from ..sources.nse_index import BENCHMARK
+from .. import pricecache
 
 JOB = "run_backtest"
 DEFAULT_WEIGHTS = settings.blend_weights
 
 
 def load_histories(db: Db, *, limit: int | None = None) -> tuple[dict, dict, pd.Series | None]:
-    prices = pd.DataFrame(db.select("prices_daily"))
+    # From the local mirror. Every panel rebuild used to pull the whole
+    # price table, and a weight sweep rebuilds it repeatedly — which is how
+    # a research afternoon spent most of a month's egress allowance.
+    pricecache.sync(db)
+    prices = pricecache.load()
     if prices.empty:
         raise SystemExit(f"[{JOB}] no prices — run load_prices first")
 

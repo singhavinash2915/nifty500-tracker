@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 
 from .. import technicals
 from ..db import Db, run
+from .. import pricecache
 from ..sources.nse_index import BENCHMARK
 
 JOB = "compute_technicals"
@@ -61,6 +62,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     db = Db(force_dry_run=args.dry_run)
+    # Prices come from the local mirror; this is the only step that talks to
+    # the database about them, and after the first night it asks for a week.
+    pricecache.sync(db)
 
     # Symbols first, prices one at a time below. Loading the whole price table
     # cost about 450MB and then accumulating every output row as a dict before a
@@ -90,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     written = 0
     with run(JOB, db=db) as log:
         for symbol in symbols:
-            group = pd.DataFrame(db.select("prices_daily", where={"symbol": symbol}))
+            group = pricecache.frame(symbol)
             if len(group) < MIN_BARS:
                 # Silent for a symbol with no prices at all: a company that left
                 # the index years ago has none, and 300 such errors a night
@@ -113,8 +117,17 @@ def main(argv: list[str] | None = None) -> int:
             )
             log.symbols_ok += 1
 
+        # Retention. `--tail` bounds what each night writes but not what past
+        # nights left behind, so without this the table creeps back up by a row
+        # per symbol per session towards the size that blew the storage quota.
+        pruned = 0
+        if args.tail and not db.dry_run:
+            cutoff = (date.today() - timedelta(days=int(args.tail * 1.6))).isoformat()
+            pruned = db.delete_before("technicals_daily", "date", cutoff)
+
         log.rows_written = written
-        log.notes = f"{log.symbols_ok} symbols, {written} rows"
+        log.notes = f"{log.symbols_ok} symbols, {written} rows" + (
+            f", {pruned} pruned before {cutoff}" if pruned else "")
         summary = log.notes
 
     mode = "dry run" if db.dry_run else "Supabase"

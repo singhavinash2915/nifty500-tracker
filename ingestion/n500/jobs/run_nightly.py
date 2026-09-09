@@ -53,7 +53,13 @@ def plan(days: int, *, dry_run: bool, skip_fundamentals: bool) -> list[Step]:
                  needs=("universe",), tolerate_failure=True)
         )
     steps += [
-        Step("technicals", "compute_technicals", common, needs=("prices", "index")),
+        # `--tail`: technicals are wholly derived from prices, and nothing
+        # reads them deeply — scoring takes 21 days, the snapshot 60, and
+        # the backtest recomputes them from prices rather than reading the
+        # table at all. Written in full it reached 822,046 rows and 323MB,
+        # two thirds of a 500MB database, for 120 days of usable data.
+        Step("technicals", "compute_technicals", [*common, "--tail", "120"],
+             needs=("prices", "index")),
         Step("fundamental_scores", "compute_fundamental_scores", common,
              needs=("universe",), tolerate_failure=True),
         Step("zones", "compute_zones", common, needs=("prices",)),

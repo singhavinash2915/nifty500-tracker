@@ -377,6 +377,25 @@ class Db:
         self._client.table(table).insert(rows).execute()
         return len(rows)
 
+    def delete_before(self, table: str, column: str, value: str) -> int:
+        """Drop rows older than `value`. Returns rows deleted, best effort.
+
+        Retention, not cleanup. `technicals_daily` is derived from prices and
+        nothing reads it deeply, but an upsert-only job never removes what it
+        superseded: written in full it grew to 822,046 rows and 323MB, two
+        thirds of the database, and the first symptom was the whole project
+        being cut off at its storage quota rather than anything looking wrong.
+        """
+        if self.dry_run:
+            return 0
+        result = (
+            self._client.table(table)
+            .delete(count="exact")
+            .lt(column, value)
+            .execute()
+        )
+        return int(result.count or 0)
+
     def count(self, table: str) -> int:
         """How many rows, without fetching any of them.
 

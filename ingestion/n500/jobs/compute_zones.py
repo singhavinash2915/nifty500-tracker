@@ -20,6 +20,7 @@ import pandas as pd
 
 from .. import indicators as ind
 from ..db import Db, run
+from .. import pricecache
 from ..scoring import plan, support
 from ..zones import candles, divergence, reversal
 from ..zones.build import build_zones, live_zones_above, live_zones_below
@@ -93,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     db = Db(force_dry_run=args.dry_run)
+    pricecache.sync(db)
 
     # Symbols first, prices per symbol inside the loop. Reading the whole table
     # was 776,300 rows and about 450MB, and on the server it crossed the
@@ -149,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
             if wanted and symbol not in wanted:
                 continue
 
-            group = pd.DataFrame(db.select("prices_daily", where={"symbol": symbol}))
+            group = pricecache.frame(symbol)
             if len(group) < MIN_BARS:
                 continue
 
