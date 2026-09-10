@@ -18,3 +18,4 @@ supabase/.temp/
 # served publicly, and these two files describe what is owned and at what price.
 data/positions.json
 data/alerts.json
+data/backup/
