@@ -44,11 +44,20 @@ notify() {
 
 {
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') starting ==="
+  # The database may be a local stack on this Mac, in which case Docker and
+  # Supabase have to be up first. A no-op when .env points at a hosted project.
+  . "$REPO/scripts/local-stack.sh"
   # Unbuffered: redirected to a file, Python buffers stdout in 8KB blocks,
   # so a run in progress shows nothing and a run that hangs shows nothing
   # about where. The log is for watching, which needs it written as it goes.
-  PYTHONUNBUFFERED=1 "$REPO/.venv/bin/python" -m n500.jobs.run_nightly --days 10 $EXTRA
-  STATUS=$?
+  if ensure_local_stack; then
+    PYTHONUNBUFFERED=1 "$REPO/.venv/bin/python" -m n500.jobs.run_nightly --days 10 $EXTRA
+    STATUS=$?
+  else
+    # Worded to match the grep below, so the notification names the cause.
+    echo "FAILED local database did not start; nothing was run"
+    STATUS=1
+  fi
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') exit $STATUS ==="
 } >> "$LOG" 2>&1
 
