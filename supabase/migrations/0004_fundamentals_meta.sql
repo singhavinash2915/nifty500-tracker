@@ -1,3 +1,6 @@
+-- Unqualified names below belong to n500; see 0001.
+set search_path = n500, public, extensions;
+
 -- Provenance for fundamentals.
 --
 -- filed_on drives every point-in-time query, so whether it is a real filing

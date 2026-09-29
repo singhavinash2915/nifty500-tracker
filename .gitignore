@@ -19,3 +19,8 @@ supabase/.temp/
 data/positions.json
 data/alerts.json
 data/backup/
+
+# Any env file except the committed templates. A saved copy of an old .env
+# holds a service key and must never be one `git add -A` away from GitHub.
+.env.*
+!.env.example

@@ -1,3 +1,6 @@
+-- Unqualified names below belong to n500; see 0001.
+set search_path = n500, public, extensions;
+
 -- =============================================================
 -- Benchmark index history, from the NSE daily index archive.
 --

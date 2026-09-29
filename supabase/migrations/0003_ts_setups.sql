@@ -1,3 +1,6 @@
+-- Unqualified names below belong to n500; see 0001.
+set search_path = n500, public, extensions;
+
 -- Daily snapshot of the support-reversal setup, alongside scores_daily.
 -- Kept separate because it carries the *reasoning* — which gate fired, which
 -- confirmations printed, where the stop sits — not just a number. When the

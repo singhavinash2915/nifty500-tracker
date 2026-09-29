@@ -1,3 +1,11 @@
+-- Self-contained: these first four migrations were written to be pasted into
+-- the dashboard's SQL editor after creating the schema by hand, a step nothing
+-- recorded. Replayed anywhere else (a local stack, a new project) they built
+-- their tables in `public`, and 0005 then failed on a schema that did not
+-- exist. Creating it here and naming it below makes the history replayable.
+create schema if not exists n500;
+set search_path = n500, public, extensions;
+
 -- =============================================================
 -- Nifty 500 Conviction Tracker — initial schema
 -- Run in Supabase Dashboard -> SQL Editor
