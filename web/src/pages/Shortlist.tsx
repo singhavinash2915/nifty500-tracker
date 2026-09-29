@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AlertTriangle } from 'lucide-react'
-import type { ScreenerRow } from '../types'
+import type { MarketBackdrop as Backdrop, ScreenerRow } from '../types'
 import { pct, share } from '../lib/format'
-import { loadPlans, loadPortfolio, type PortfolioSettings, type PositionView } from '../lib/load'
+import { loadBackdrop, loadPlans, loadPortfolio, type PortfolioSettings, type PositionView } from '../lib/load'
+import { FADING_FLAG_AT, featureLabel } from '../lib/features'
+import { MarketBackdrop } from '../components/MarketBackdrop'
 import { basketEffect, buildShortlist, capacity, type Candidate } from '../lib/shortlist'
 
 const rupees = (v: number | null | undefined) =>
@@ -22,14 +24,16 @@ export function Shortlist({ rows }: { rows: ScreenerRow[] }) {
   const [plans, setPlans] = useState<Awaited<ReturnType<typeof loadPlans>>>(new Map())
   const [loading, setLoading] = useState(true)
   const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [backdrop, setBackdrop] = useState<Backdrop | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([loadPortfolio(), loadPlans()]).then(([portfolio, planMap]) => {
+    Promise.all([loadPortfolio(), loadPlans(), loadBackdrop()]).then(([portfolio, planMap, market]) => {
       if (cancelled) return
       setHeld(portfolio.positions)
       setSettings(portfolio.settings)
       setPlans(planMap)
+      setBackdrop(market)
       setLoading(false)
     })
     return () => {
@@ -66,6 +70,8 @@ export function Shortlist({ rows }: { rows: ScreenerRow[] }) {
         movement.
       </p>
 
+      {!loading && <MarketBackdrop compact data={backdrop} />}
+
       {loading ? (
         <p className="text-sm text-slate-500">Loading…</p>
       ) : !settings ? (
@@ -100,6 +106,7 @@ export function Shortlist({ rows }: { rows: ScreenerRow[] }) {
                 <CandidateCard
                   key={c.row.symbol}
                   candidate={c}
+                  weakMarket={backdrop?.regime === 'weak'}
                   picked={picked.has(c.row.symbol)}
                   onToggle={() => toggle(c.row.symbol)}
                 />
@@ -165,11 +172,12 @@ export function Shortlist({ rows }: { rows: ScreenerRow[] }) {
 }
 
 function CandidateCard({
-  candidate: c, picked, onToggle,
+  candidate: c, picked, onToggle, weakMarket,
 }: {
   candidate: Candidate
   picked: boolean
   onToggle: () => void
+  weakMarket: boolean
 }) {
   const { row } = c
   return (
@@ -222,6 +230,8 @@ function CandidateCard({
               hint={`${c.risk_units.toFixed(2)} of a unit · stop ${pct(c.stop_pct, 1)} away`} />
       </dl>
 
+      <WhyItRanks row={row} weakMarket={weakMarket} />
+
       {c.warnings.length > 0 && (
         <ul className="mt-3 grid gap-1 text-sm">
           {c.warnings.map((w) => (
@@ -231,6 +241,48 @@ function CandidateCard({
             </li>
           ))}
         </ul>
+      )}
+    </div>
+  )
+}
+
+/**
+ * What earned the rank: the features lifting it most, in points above a
+ * neutral 50, which add up to the conviction score. In a weak market, how
+ * much of that lift comes from signals that stopped working in weak markets.
+ */
+function WhyItRanks({ row, weakMarket }: { row: ScreenerRow; weakMarket: boolean }) {
+  const drivers = row.conviction_drivers ?? []
+  if (!drivers.length) return null
+  const fading = row.conviction_fading_share ?? null
+  const leans = weakMarket && fading !== null && fading >= FADING_FLAG_AT
+
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-3 dark:border-slate-800">
+      <p className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-slate-500">
+        Why it ranks
+      </p>
+      <ul className="flex flex-wrap gap-2">
+        {drivers.map(([name, points]) => (
+          <li key={name}
+              className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+            {featureLabel(name)}
+            <span className="ml-1.5 font-mono tabular-nums text-slate-500">+{points.toFixed(1)}</span>
+          </li>
+        ))}
+      </ul>
+      {weakMarket && fading !== null && fading > 0 && (
+        <p className={`mt-2 flex items-start gap-2 text-sm ${
+          leans ? 'text-amber-900 dark:text-amber-300' : 'text-slate-500'
+        }`}>
+          {leans && <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+          <span>
+            {share(fading, 0)} of this rank comes from momentum, value or margin revision,
+            {leans
+              ? ' which stopped working in weak markets. The rank leans on them.'
+              : ' which stopped working in weak markets.'}
+          </span>
+        </p>
       )}
     </div>
   )

@@ -139,9 +139,21 @@ def score(frame: pd.DataFrame) -> pd.Series:
     z-score on a flag that fires 5% of the time is mostly a statement about the
     other 95%.
     """
-    ranks: list[pd.Series] = []
-    available = pd.Series(0, index=frame.index, dtype="int64")
+    ranks = _signed_ranks(frame)
+    if ranks.empty:
+        return pd.Series(np.nan, index=frame.index, dtype="float64")
 
+    mean = ranks.mean(axis=1, skipna=True) * 100.0
+    return mean.where(ranks.notna().sum(axis=1) >= MIN_FEATURES).round(2)
+
+
+def _signed_ranks(frame: pd.DataFrame) -> pd.DataFrame:
+    """Within-date percentile rank of every feature, signed. One column each.
+
+    Shared by `score` and `rank_contributions` so the explanation of a rank
+    is computed from exactly the numbers the rank was.
+    """
+    columns: dict[str, pd.Series] = {}
     for name, sign in WEIGHTS.items():
         if name not in frame:
             continue
@@ -149,14 +161,37 @@ def score(frame: pd.DataFrame) -> pd.Series:
         if values.notna().sum() == 0:
             continue
         # pct ranks land in (0, 1]; NaN stays NaN so it does not count as median.
-        ranks.append(values.rank(pct=True))
-        available += values.notna().astype("int64")
+        columns[name] = values.rank(pct=True)
+    return pd.DataFrame(columns, index=frame.index)
 
-    if not ranks:
-        return pd.Series(np.nan, index=frame.index, dtype="float64")
 
-    mean = pd.concat(ranks, axis=1).mean(axis=1, skipna=True) * 100.0
-    return mean.where(available >= MIN_FEATURES).round(2)
+def rank_contributions(frame: pd.DataFrame) -> pd.DataFrame:
+    """How many points each feature moves each stock's score, from a neutral 50.
+
+    The score is the mean of the features' within-date percentile ranks, so a
+    feature's share of it is (rank - 0.5) * 100 / n, where n is the number of
+    features that stock has. They add up exactly to `score - 50`: the
+    breakdown and the score cannot disagree.
+
+    `contributions` above gives raw values times their sign, which cannot
+    compare a 0/1 candle flag with a distance in ATRs. This can: a flag that
+    fires on 5% of stocks is worth about +3.7 points to a stock that has it and
+    -0.2 to one that does not, which is what it actually does to the rank.
+    """
+    ranks = _signed_ranks(frame)
+    n = ranks.notna().sum(axis=1).replace(0, np.nan)
+    return (ranks - 0.5).mul(100.0).div(n, axis=0)
+
+
+def top_drivers(points: pd.Series, n: int = 3) -> list[list]:
+    """The features lifting a stock's rank most, as [[feature, points], ...].
+
+    Positive contributions only: what earned the rank, not what held it back.
+    Compact on purpose, since it is sent with every screener row.
+    """
+    lifting = points.dropna()
+    lifting = lifting[lifting > 0].sort_values(ascending=False).head(n)
+    return [[name, round(float(v), 1)] for name, v in lifting.items()]
 
 
 def contributions(row: pd.Series) -> dict[str, float]:

@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { AlertRow, Bars, PeriodRecord, ScreenerRow, ScreenerSnapshot, StockDetail, Zone } from '../types'
+import type { AlertRow, Bars, MarketBackdrop, PeriodRecord, ScreenerRow, ScreenerSnapshot, StockDetail, Zone } from '../types'
 
 // Two years of daily bars are shown, but the moving averages are computed over
 // a longer window so the 200DMA has a value on the very first visible bar
@@ -95,7 +95,9 @@ export async function loadScreener(): Promise<{
  * Storage can be unavailable (private windows, blocked site data) or full, and
  * either must fall through to a normal fetch rather than break the page.
  */
-const SCREENER_CACHE_KEY = 'n500:screener'
+// Versioned: bump it when the row shape changes, or a day cached before the
+// change keeps serving rows without the new fields until the next session.
+const SCREENER_CACHE_KEY = 'n500:screener:v2'
 
 function readScreenerCache(asOf: string): ScreenerRow[] | null {
   try {
@@ -111,6 +113,8 @@ function readScreenerCache(asOf: string): ScreenerRow[] | null {
 function writeScreenerCache(asOf: string, rows: ScreenerRow[]): void {
   try {
     localStorage.setItem(SCREENER_CACHE_KEY, JSON.stringify({ as_of: asOf, rows }))
+    // Earlier versions' entries are dead weight: ~440KB each.
+    localStorage.removeItem('n500:screener')
   } catch {
     // Quota or privacy settings. The page works without it.
   }
@@ -139,6 +143,8 @@ function toScreenerRow(r: Record<string, any>): ScreenerRow {
     blended: r.blended,
     conviction: r.conviction ?? null,
     conviction_decile: r.conviction_decile ?? null,
+    conviction_drivers: r.conviction_drivers ?? null,
+    conviction_fading_share: r.conviction_fading_share ?? null,
     on_buylist: Boolean(r.on_buylist),
     buylist_since: r.buylist_since ?? null,
     buylist_rank: r.buylist_rank ?? null,
@@ -847,4 +853,37 @@ export async function loadSetup(
         }
 
   return { setup, overhead }
+}
+
+/**
+ * Today's market backdrop: one row, written nightly by compute_backdrop.
+ * Null when there is none yet (a database the job has not run against), so
+ * the panel can simply not render rather than show an error.
+ */
+export async function loadBackdrop(): Promise<MarketBackdrop | null> {
+  if (!supabase) return null
+  try {
+    const { data, error } = await supabase
+      .from('market_backdrop')
+      .select('*')
+      .order('date', { ascending: false })
+      .limit(1)
+    if (error || !data?.length) return null
+    const r = data[0]
+    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
+    return {
+      ...r,
+      breadth: Number(r.breadth),
+      drawdown: Number(r.drawdown),
+      vs_200dma: Number(r.vs_200dma),
+      return_3m: Number(r.return_3m),
+      hist_months: num(r.hist_months),
+      hist_top: num(r.hist_top),
+      hist_avg: num(r.hist_avg),
+      hist_ic_positive: num(r.hist_ic_positive),
+      hist_episodes: num(r.hist_episodes),
+    } as MarketBackdrop
+  } catch {
+    return null
+  }
 }

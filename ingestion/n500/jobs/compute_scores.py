@@ -32,7 +32,7 @@ import pandas as pd
 
 from ..config import DATA_DIR, settings
 from ..db import Db, run
-from ..scoring import buylist, conviction, momentum, redflags
+from ..scoring import buylist, conviction, momentum, redflags, regime
 from ..scoring.ranking import peer_groups
 
 JOB = "compute_scores"
@@ -296,6 +296,8 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         conv = conviction.score(features).mask(excluded)
+        # What earned each rank, from the same ranks the score was built on.
+        points = conviction.rank_contributions(features)
         conv_decile = pd.Series(pd.NA, index=conv.index, dtype="Int64")
         if conv.notna().sum() >= 10:
             conv_decile[conv.notna()] = (
@@ -364,6 +366,14 @@ def main(argv: list[str] | None = None) -> int:
                         else bool(snapshot.at[symbol, "close"] > snapshot.at[symbol, "sma200"])
                     ),
                     "conviction": None if pd.isna(conv.loc[symbol]) else float(conv.loc[symbol]),
+                    "conviction_drivers": (
+                        None if pd.isna(conv.loc[symbol])
+                        else conviction.top_drivers(points.loc[symbol])
+                    ),
+                    "conviction_fading_share": (
+                        None if pd.isna(conv.loc[symbol])
+                        else regime.fading_share(points.loc[symbol])
+                    ),
                     "on_buylist": symbol in member_by,
                     "buylist_since": (
                         member_by[symbol].since.isoformat() if symbol in member_by else None

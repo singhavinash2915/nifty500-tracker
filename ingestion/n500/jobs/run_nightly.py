@@ -63,6 +63,7 @@ def plan(days: int, *, dry_run: bool, skip_fundamentals: bool) -> list[Step]:
         Step("fundamental_scores", "compute_fundamental_scores", common,
              needs=("universe",), tolerate_failure=True),
         Step("zones", "compute_zones", common, needs=("prices",)),
+        Step("backdrop", "compute_backdrop", common, needs=("prices",)),
         Step("scores", "compute_scores", common, needs=("technicals", "zones")),
         # No export_snapshot here. It wrote fallback files into the running
         # machine's web/public, which the site never deploys (it builds from

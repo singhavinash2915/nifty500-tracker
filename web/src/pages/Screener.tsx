@@ -7,6 +7,7 @@ import { funnel, isExcluded, pickTechnical, reblend, winningSetup } from '../lib
 import { pct } from '../lib/format'
 import { loadDivergence, type Divergence } from '../lib/load'
 import { MarketStrip } from '../components/MarketStrip'
+import { MarketBackdrop } from '../components/MarketBackdrop'
 
 type SortKey =
   | 'conviction' | 'blended' | 'quality_score' | 'value_score' | 'revision_score'
@@ -97,6 +98,7 @@ export function Screener({ rows }: { rows: ScreenerRow[] }) {
   return (
     <>
       <MarketStrip />
+      <MarketBackdrop />
       {/* On a phone these two panels are a full screen of preamble before the
           list they describe, so they start closed and the list starts visible. */}
       <button

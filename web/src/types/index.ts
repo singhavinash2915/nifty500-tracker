@@ -27,6 +27,10 @@ export interface ScreenerRow {
   /** The composite fitted on 2023-24 and validated once on 2025-26. */
   conviction: number | null
   conviction_decile: number | null
+  /** What lifts the conviction rank most: [feature, points above a neutral 50]. */
+  conviction_drivers?: [string, number][] | null
+  /** Share of that lift from signals that go flat in weak markets. */
+  conviction_fading_share?: number | null
   /** On the buy list, which enters at rank 10 and leaves only past 25. */
   on_buylist: boolean
   buylist_since: string | null
@@ -174,4 +178,21 @@ export interface AlertRow {
   message: string
   payload: { severity?: Severity; [key: string]: unknown }
   seen: boolean
+}
+
+/** The market backdrop and what the ranking earned in past months like it. */
+export interface MarketBackdrop {
+  date: string
+  /** Share of stocks above their own 200-day average. */
+  breadth: number
+  drawdown: number
+  vs_200dma: number
+  return_3m: number
+  regime: 'weak' | 'strong'
+  hist_months: number | null
+  hist_top: number | null
+  hist_avg: number | null
+  hist_ic_positive: number | null
+  hist_episodes: number | null
+  study: string | null
 }
