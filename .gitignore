@@ -24,3 +24,5 @@ data/backup/
 # holds a service key and must never be one `git add -A` away from GitHub.
 .env.*
 !.env.example
+# Nightly ranking archive (compute_scores). Runtime data, grows every session.
+data/archive/
