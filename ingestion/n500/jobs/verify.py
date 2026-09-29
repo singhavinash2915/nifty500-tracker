@@ -293,6 +293,47 @@ def check_prices(db: Db) -> list[Check]:
     ]
 
 
+# The free plan allows 5GB of egress a month for the whole organization. The
+# pipeline gets a fifth of it and the web app the rest. Measured after the
+# fixes of September 2026 the pipeline needs about 13MB a night, roughly 400MB a
+# month, so reaching this budget means something regressed.
+EGRESS_QUOTA = 5 * 1024**3
+PIPELINE_EGRESS_BUDGET = EGRESS_QUOTA // 5
+
+
+def egress_checks(bytes_this_month: int, today: date,
+                  budget: int = PIPELINE_EGRESS_BUDGET) -> list[Check]:
+    """Month-to-date pipeline egress against its budget.
+
+    Written after the quota was exceeded with no warning at all: the pipeline
+    had read about 325MB a night for weeks, and the first sign was every
+    project in the organization returning 402. Over budget fails the run, so
+    it arrives as a failure notification while there is still quota left.
+    On course to exceed it by month end is a warning.
+
+    Counts the pipeline only. What visitors to the site pull is not visible
+    from here; check the organization's usage page for that.
+    """
+    days_in_month = (date(today.year + today.month // 12, today.month % 12 + 1, 1)
+                     - timedelta(days=1)).day
+    projected = bytes_this_month / today.day * days_in_month
+    mb = lambda n: f"{n / 1024**2:,.0f}MB"
+    return [
+        Check("pipeline egress is inside its budget", bytes_this_month <= budget,
+              f"{mb(bytes_this_month)} read this month, budget {mb(budget)} "
+              f"of the {mb(EGRESS_QUOTA)} plan"),
+        Check("pipeline egress is on course", projected <= budget,
+              f"projected {mb(projected)} by month end", fatal=False),
+    ]
+
+
+def check_egress(db: Db) -> list[Check]:
+    today = date.today()
+    rows = db.select("ingestion_runs", columns="id,bytes_read",
+                     since=("started_at", today.replace(day=1).isoformat()))
+    return egress_checks(sum(int(r.get("bytes_read") or 0) for r in rows), today)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify the last run's output")
     parser.add_argument("--dry-run", action="store_true")
@@ -302,7 +343,8 @@ def main(argv: list[str] | None = None) -> int:
     checks: list[Check] = []
 
     with run(JOB, db=db) as log:
-        for group in (check_prices, check_universe, check_scores, check_plans, check_positions):
+        for group in (check_prices, check_universe, check_scores, check_plans,
+                      check_positions, check_egress):
             try:
                 checks.extend(group(db))
             except Exception as exc:  # noqa: BLE001

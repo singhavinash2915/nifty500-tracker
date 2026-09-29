@@ -107,7 +107,14 @@ def main(argv: list[str] | None = None) -> int:
         last = prices.sort_values("date").groupby("symbol").tail(1)
         closes = dict(zip(last["symbol"], pd.to_numeric(last["adj_close"], errors="coerce")))
 
-    scores = pd.DataFrame(db.select("scores_daily"))
+    # Only the symbols held, and only recent rows. The whole table was read to
+    # mark eight positions, at a cost that grew every night.
+    held = sorted({row["symbol"] for row in open_rows})
+    since = (date.today() - timedelta(days=45)).isoformat()
+    scores = pd.DataFrame(
+        [r for s in held
+         for r in db.select("scores_daily", where={"symbol": s}, since=("date", since))]
+    )
     latest = (
         scores.sort_values("date").groupby("symbol").tail(1).set_index("symbol")
         if not scores.empty else pd.DataFrame()

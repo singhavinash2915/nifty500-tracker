@@ -43,10 +43,21 @@ export function MarketStrip() {
     }
     load()
     // Matches the poller's cadence; polling faster only re-reads the same row.
-    const timer = setInterval(load, 60_000)
+    // Skipped while the tab is hidden: a tab left open in the background read
+    // the table 1,440 times a day, for quotes nobody was looking at, and egress
+    // on the free plan is metered for the whole organization. Coming back to
+    // the tab refreshes at once, so nothing looks stale.
+    const timer = setInterval(() => {
+      if (!document.hidden) load()
+    }, 60_000)
+    const onVisible = () => {
+      if (!document.hidden) load()
+    }
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
       cancelled = true
       clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [])
 

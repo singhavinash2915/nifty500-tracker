@@ -56,6 +56,11 @@ export async function loadScreener(): Promise<{
       const latest = head?.[0]?.date as string | undefined
       if (!latest) throw new Error('no scored rows')
 
+      const cached = readScreenerCache(latest)
+      if (cached) {
+        return { snapshot: { as_of: latest, rows: cached }, source: 'supabase', error: null }
+      }
+
       const { data, error } = await supabase
         .from('scores_daily')
         .select('*, stocks(company_name, sector, company_type)')
@@ -65,6 +70,7 @@ export async function loadScreener(): Promise<{
       if (error) throw new Error(error.message)
       if (data?.length) {
         const rows = data.map(toScreenerRow)
+        writeScreenerCache(latest, rows)
         return { snapshot: { as_of: latest, rows }, source: 'supabase', error: null }
       }
     } catch (e) {
@@ -75,6 +81,39 @@ export async function loadScreener(): Promise<{
   }
 
   return { snapshot: await loadSnapshotFile(), source: 'snapshot', error: null }
+}
+
+/**
+ * The screener, kept in the browser for the trading day it belongs to.
+ *
+ * The ranking changes once a night, so every reload after the first was
+ * downloading the same 436KB again. Egress is metered per organization on the
+ * free plan, and running over it restricted every project in the organization.
+ * Keyed by the scoring date, which the one-row query above has already
+ * fetched, so a new night's ranking replaces this without any expiry logic.
+ *
+ * Storage can be unavailable (private windows, blocked site data) or full, and
+ * either must fall through to a normal fetch rather than break the page.
+ */
+const SCREENER_CACHE_KEY = 'n500:screener'
+
+function readScreenerCache(asOf: string): ScreenerRow[] | null {
+  try {
+    const raw = localStorage.getItem(SCREENER_CACHE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { as_of?: string; rows?: ScreenerRow[] }
+    return parsed.as_of === asOf && Array.isArray(parsed.rows) ? parsed.rows : null
+  } catch {
+    return null
+  }
+}
+
+function writeScreenerCache(asOf: string, rows: ScreenerRow[]): void {
+  try {
+    localStorage.setItem(SCREENER_CACHE_KEY, JSON.stringify({ as_of: asOf, rows }))
+  } catch {
+    // Quota or privacy settings. The page works without it.
+  }
 }
 
 async function loadSnapshotFile(): Promise<ScreenerSnapshot> {

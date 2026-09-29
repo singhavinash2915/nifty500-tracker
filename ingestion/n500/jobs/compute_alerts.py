@@ -42,9 +42,16 @@ def _record(frame: pd.DataFrame, symbol: str) -> dict | None:
 
 def snapshots(db: Db) -> tuple[pd.DataFrame, pd.DataFrame, date | None]:
     """Today's and the previous session's scores, indexed by symbol."""
-    scores = pd.DataFrame(db.select("scores_daily"))
-    if scores.empty:
+    # Two sessions, asked for by date. Reading the whole table to find them
+    # grew by ~500 rows a night and would have reached a gigabyte a month.
+    # Asking for the dates rather than a trailing window also survives a long
+    # gap: after three weeks offline the previous session is still found.
+    dates = db.recent_values("scores_daily", "date", 2)
+    if not dates:
         raise SystemExit(f"[{JOB}] no scores — run compute_scores first")
+    scores = pd.DataFrame(
+        [row for d in dates for row in db.select("scores_daily", where={"date": d})]
+    )
 
     scores["date"] = pd.to_datetime(scores["date"]).dt.date
     dates = sorted(scores["date"].unique())
@@ -62,7 +69,9 @@ def snapshots(db: Db) -> tuple[pd.DataFrame, pd.DataFrame, date | None]:
 
 def enrich_from_setups(db: Db, current: pd.DataFrame) -> pd.DataFrame:
     """Fold in the reasoning fields the alert messages quote."""
-    setups = pd.DataFrame(db.select("ts_setups"))
+    # The latest night's setups only. compute_zones writes every symbol it
+    # evaluates each run, so an older row is a stale reason, not a missing one.
+    setups = pd.DataFrame(db.select_latest("ts_setups"))
     if setups.empty:
         return current
     latest = setups.sort_values("date").groupby("symbol").tail(1).set_index("symbol")

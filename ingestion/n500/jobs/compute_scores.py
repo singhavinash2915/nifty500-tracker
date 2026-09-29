@@ -21,13 +21,16 @@ and leaving it there with a poor number invites it to be bought anyway.
 from __future__ import annotations
 
 import argparse
+import gzip
+import json
 import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from ..config import settings
+from ..config import DATA_DIR, settings
 from ..db import Db, run
 from ..scoring import buylist, conviction, momentum, redflags
 from ..scoring.ranking import peer_groups
@@ -93,6 +96,30 @@ def build_snapshot(technicals: pd.DataFrame, prices: pd.DataFrame, stocks: pd.Da
     return snapshot
 
 
+ARCHIVE_DIR = DATA_DIR / "archive" / "scores"
+ARCHIVE_COLUMNS = (
+    "symbol", "date", "close", "blended", "conviction", "conviction_decile",
+    "decile", "on_buylist", "buylist_rank", "buylist_since",
+)
+
+
+def archive_scores(rows: list[dict], as_of: date) -> Path:
+    """Keep tonight's ranking on local disk, one small file per session.
+
+    `scores_daily` is pruned to recent sessions in Supabase to stay inside the
+    free plan's 500MB, but the history is the only record of how this ranking
+    performed live rather than in a backtest. A held-out test can say the
+    model worked in 2025; only this can say whether it works now. The rows are
+    already in memory, so keeping them costs no egress: about 30KB a night.
+    """
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    path = ARCHIVE_DIR / f"{as_of.isoformat()}.json.gz"
+    slim = [{k: r.get(k) for k in ARCHIVE_COLUMNS} for r in rows]
+    with gzip.open(path, "wt") as f:
+        json.dump(slim, f, default=str)
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compute the daily scores")
     parser.add_argument("--dry-run", action="store_true")
@@ -132,7 +159,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
 
-    fundamentals = pd.DataFrame(db.select("fundamental_scores"))
+    # Tonight's scores only: the table gains ~375 rows a night and every
+    # symbol is rescored each run, so older rows are superseded.
+    fundamentals = pd.DataFrame(db.select_latest("fundamental_scores"))
     q = pd.Series(np.nan, index=snapshot.index, dtype="float64")
     v = pd.Series(np.nan, index=snapshot.index, dtype="float64")
     rev = pd.Series(np.nan, index=snapshot.index, dtype="float64")
@@ -354,6 +383,8 @@ def main(argv: list[str] | None = None) -> int:
             log.symbols_ok += 1
 
         log.rows_written = db.upsert("scores_daily", rows, on_conflict="symbol,date")
+        if not db.dry_run:
+            archive_scores(rows, as_of)
         support_wins = int((winner == "support").sum())
         thin = sum(1 for f in market_flags.values() if redflags.excluded(f))
         log.notes = (

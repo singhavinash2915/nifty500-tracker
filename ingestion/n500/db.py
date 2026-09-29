@@ -111,9 +111,17 @@ def _collapse_duplicates(
 class Db:
     """Thin wrapper over supabase-py with a dry-run fallback."""
 
+    bytes_read: int = 0
+
     def __init__(self, *, force_dry_run: bool = False) -> None:
         self.dry_run = force_dry_run or not settings.has_supabase
         self._client = None
+        # Response bytes read from the API, as JSON. Supabase meters egress per
+        # organization and restricts the whole organization when a free plan
+        # runs over, so every job records what it pulled and `verify` adds up
+        # the month. Uncompressed, which overstates the real figure: the safe
+        # direction for an alarm.
+        self.bytes_read = 0
         if not self.dry_run:
             from supabase import create_client
             from supabase.client import ClientOptions
@@ -329,6 +337,11 @@ class Db:
         if self.dry_run:
             path = DRYRUN_DIR / f"{table}.json"
             rows = json.loads(path.read_text()) if path.exists() else []
+            # `where` was ignored here, so every filtered dry-run read returned
+            # the whole table and a rehearsal could pass on data the real query
+            # would never have returned.
+            for column, value in (where or {}).items():
+                rows = [r for r in rows if str(r.get(column)) == str(value)]
             if since is not None:
                 column, value = since
                 rows = [r for r in rows if str(r.get(column, "")) >= str(value)]
@@ -356,10 +369,50 @@ class Db:
                 query = _seek_past(query, order_by, cursor)
 
             page = query.limit(page_size).execute().data
+            self.bytes_read += len(json.dumps(page, default=str))
             rows.extend(page)
             if len(page) < page_size:
                 return rows
             cursor = {column: page[-1][column] for column in order_by}
+
+    def recent_values(self, table: str, column: str, n: int = 2) -> list[Any]:
+        """The `n` most recent distinct values of `column`, newest first.
+
+        For jobs that need "today and the session before" and nothing else.
+        Reading the whole table to find two dates is what made
+        `compute_alerts` pull every score row ever written, a cost that grows
+        by about 500 rows a session with nothing to stop it. This asks for one
+        row per value, so it costs the same in year five as in week one.
+        """
+        if self.dry_run:
+            path = DRYRUN_DIR / f"{table}.json"
+            rows = json.loads(path.read_text()) if path.exists() else []
+            values = sorted({str(r[column]) for r in rows if r.get(column) is not None},
+                            reverse=True)
+            return values[:n]
+
+        found: list[Any] = []
+        for _ in range(n):
+            query = self._client.table(table).select(column)
+            if found:
+                query = query.lt(column, found[-1])
+            page = query.order(column, desc=True).limit(1).execute().data
+            self.bytes_read += len(json.dumps(page, default=str))
+            if not page:
+                break
+            found.append(page[0][column])
+        return found
+
+    def select_latest(self, table: str, column: str = "date") -> list[dict[str, Any]]:
+        """Every row from the most recent `column` value, and nothing older.
+
+        For tables written in full each night (`fundamental_scores`,
+        `ts_setups`) where only tonight's rows matter. Grouping the whole table
+        by symbol and taking the last row gives the same answer at a cost that
+        grows every night.
+        """
+        latest = self.recent_values(table, column, 1)
+        return self.select(table, where={column: latest[0]}) if latest else []
 
     def insert(self, table: str, rows: Sequence[dict[str, Any]]) -> int:
         """Plain insert, for rows whose primary key the database assigns.
@@ -474,6 +527,7 @@ def run(job: str, *, db: Db | None = None) -> Iterator[RunLogger]:
             logger.run_id,
             status="failed",
             rows_written=logger.rows_written,
+            bytes_read=db.bytes_read,
             symbols_ok=logger.symbols_ok,
             symbols_failed=logger.symbols_failed,
             errors=logger.errors + [{"symbol": "*", "error": repr(exc)[:500]}],
@@ -485,6 +539,7 @@ def run(job: str, *, db: Db | None = None) -> Iterator[RunLogger]:
             logger.run_id,
             status=logger.status,
             rows_written=logger.rows_written,
+            bytes_read=db.bytes_read,
             symbols_ok=logger.symbols_ok,
             symbols_failed=logger.symbols_failed,
             errors=logger.errors,

@@ -32,7 +32,11 @@ npm run dev   --prefix web
 npm run build --prefix web      # tsc -b && vite build
 ```
 
-Nightly the same jobs run in order with `--days 10` and no `--dry-run`.
+Nightly the same jobs run in order with `--days 10` and no `--dry-run`, except
+`export_snapshot` (run by hand to refresh the committed fallback), plus `prune`,
+which holds `scores_daily`, `ts_setups` and `fundamental_scores` to 120 days.
+Every job records the bytes it read in `ingestion_runs.bytes_read`; `verify`
+fails the run once the month passes the pipeline's 1GB egress budget.
 
 ## Layout
 

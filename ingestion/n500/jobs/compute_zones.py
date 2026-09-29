@@ -110,7 +110,9 @@ def main(argv: list[str] | None = None) -> int:
     quality_gate = not args.no_quality_gate
     quality_by: dict[str, float] = {}
     excluded: set[str] = set()
-    fundamentals = pd.DataFrame(db.select("fundamental_scores"))
+    # Tonight's scores only: the table gains ~375 rows a night and every
+    # symbol is rescored each run, so older rows are superseded.
+    fundamentals = pd.DataFrame(db.select_latest("fundamental_scores"))
     if not fundamentals.empty:
         latest = fundamentals.sort_values("date").groupby("symbol").tail(1)
         for _, row in latest.iterrows():

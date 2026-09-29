@@ -64,12 +64,17 @@ def plan(days: int, *, dry_run: bool, skip_fundamentals: bool) -> list[Step]:
              needs=("universe",), tolerate_failure=True),
         Step("zones", "compute_zones", common, needs=("prices",)),
         Step("scores", "compute_scores", common, needs=("technicals", "zones")),
-        Step("snapshot", "export_snapshot", common, needs=("scores",)),
+        # No export_snapshot here. It wrote fallback files into the running
+        # machine's web/public, which the site never deploys (it builds from
+        # git), and read 22MB a night from Supabase to do it: two thirds of the
+        # pipeline's egress, for nothing. It is still run by hand when the
+        # committed fallback needs refreshing.
         Step("positions", "compute_positions", common, needs=("scores",)),
         Step("alerts", "compute_alerts", [*common, "--quiet"], needs=("scores",)),
         # Last, and it needs nothing: the invariants should run even when a
         # step failed, because the interesting question then is exactly what
         # the half-finished output looks like.
+        Step("prune", "prune", common, needs=("scores",)),
         Step("verify", "verify", common),
     ]
     return steps
