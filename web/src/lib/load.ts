@@ -46,17 +46,30 @@ export async function loadScreener(): Promise<{
       // away from breaking: PostgREST caps a response at 1000 rows without
       // saying so, and the truncation would have silently cut the bottom off
       // the screener.
-      const { data: head, error: headError } = await supabase
-        .from('scores_daily')
-        .select('date')
-        .order('date', { ascending: false })
-        .limit(1)
+      const [{ data: head, error: headError }, { data: lastRun }] = await Promise.all([
+        supabase
+          .from('scores_daily')
+          .select('date')
+          .order('date', { ascending: false })
+          .limit(1),
+        // When the scores were last written. The date alone is not enough:
+        // re-scoring the same day (a backfill, a fix) changed 480 rows to
+        // 489 and the cache went on serving the 480.
+        supabase
+          .from('ingestion_runs')
+          .select('finished_at')
+          .eq('job', 'compute_scores')
+          .not('finished_at', 'is', null)
+          .order('id', { ascending: false })
+          .limit(1),
+      ])
       if (headError) throw new Error(headError.message)
 
       const latest = head?.[0]?.date as string | undefined
       if (!latest) throw new Error('no scored rows')
+      const cacheKey = `${latest}|${lastRun?.[0]?.finished_at ?? ''}`
 
-      const cached = readScreenerCache(latest)
+      const cached = readScreenerCache(cacheKey)
       if (cached) {
         return { snapshot: { as_of: latest, rows: cached }, source: 'supabase', error: null }
       }
@@ -70,7 +83,7 @@ export async function loadScreener(): Promise<{
       if (error) throw new Error(error.message)
       if (data?.length) {
         const rows = data.map(toScreenerRow)
-        writeScreenerCache(latest, rows)
+        writeScreenerCache(cacheKey, rows)
         return { snapshot: { as_of: latest, rows }, source: 'supabase', error: null }
       }
     } catch (e) {
@@ -89,32 +102,35 @@ export async function loadScreener(): Promise<{
  * The ranking changes once a night, so every reload after the first was
  * downloading the same 436KB again. Egress is metered per organization on the
  * free plan, and running over it restricted every project in the organization.
- * Keyed by the scoring date, which the one-row query above has already
- * fetched, so a new night's ranking replaces this without any expiry logic.
+ * Keyed by the scoring date and the time that scoring run finished, both
+ * fetched as single rows above, so a new night's ranking or a re-run of the
+ * same day replaces this without any expiry logic.
  *
  * Storage can be unavailable (private windows, blocked site data) or full, and
  * either must fall through to a normal fetch rather than break the page.
  */
 // Versioned: bump it when the row shape changes, or a day cached before the
 // change keeps serving rows without the new fields until the next session.
-const SCREENER_CACHE_KEY = 'n500:screener:v2'
+const SCREENER_CACHE_KEY = 'n500:screener:v3'
 
-function readScreenerCache(asOf: string): ScreenerRow[] | null {
+function readScreenerCache(key: string): ScreenerRow[] | null {
   try {
     const raw = localStorage.getItem(SCREENER_CACHE_KEY)
     if (!raw) return null
-    const parsed = JSON.parse(raw) as { as_of?: string; rows?: ScreenerRow[] }
-    return parsed.as_of === asOf && Array.isArray(parsed.rows) ? parsed.rows : null
+    const parsed = JSON.parse(raw) as { key?: string; rows?: ScreenerRow[] }
+    return parsed.key === key && Array.isArray(parsed.rows) ? parsed.rows : null
   } catch {
     return null
   }
 }
 
-function writeScreenerCache(asOf: string, rows: ScreenerRow[]): void {
+/** `key` is the scoring date plus when that scoring run finished. */
+function writeScreenerCache(key: string, rows: ScreenerRow[]): void {
   try {
-    localStorage.setItem(SCREENER_CACHE_KEY, JSON.stringify({ as_of: asOf, rows }))
+    localStorage.setItem(SCREENER_CACHE_KEY, JSON.stringify({ key, rows }))
     // Earlier versions' entries are dead weight: ~440KB each.
     localStorage.removeItem('n500:screener')
+    localStorage.removeItem('n500:screener:v2')
   } catch {
     // Quota or privacy settings. The page works without it.
   }
