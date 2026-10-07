@@ -189,9 +189,10 @@ def top_drivers(points: pd.Series, n: int = 3) -> list[list]:
     Positive contributions only: what earned the rank, not what held it back.
     Compact on purpose, since it is sent with every screener row.
     """
-    lifting = points.dropna()
+    lifting = points.dropna().round(1)
+    # Above zero once rounded: a "+0.0" lift is not a reason a stock ranks.
     lifting = lifting[lifting > 0].sort_values(ascending=False).head(n)
-    return [[name, round(float(v), 1)] for name, v in lifting.items()]
+    return [[name, float(v)] for name, v in lifting.items()]
 
 
 def contributions(row: pd.Series) -> dict[str, float]:

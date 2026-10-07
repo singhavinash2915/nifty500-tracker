@@ -63,6 +63,11 @@ class TestRankContributions:
         assert conviction.top_drivers(points) == [
             ["headroom", 6.1], ["false_breakout", 3.8], ["value_score", 1.2]]
 
+    def test_a_lift_that_rounds_to_nothing_is_not_a_driver(self):
+        # EMBASSY on 7 October listed "zone respect +0.0" as a top driver.
+        points = pd.Series({"resistance_strength": 4.7, "tm_score": 3.0, "zone_respect": 0.03})
+        assert conviction.top_drivers(points) == [["resistance_strength", 4.7], ["tm_score", 3.0]]
+
     def test_a_stock_with_nothing_lifting_it_has_no_drivers(self):
         assert conviction.top_drivers(pd.Series({"headroom": -1.0})) == []
 
