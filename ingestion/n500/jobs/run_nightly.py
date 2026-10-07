@@ -38,6 +38,43 @@ class Step:
     # A step that may fail without poisoning what follows — the scrapers, whose
     # upstream is outside our control.
     tolerate_failure: bool = False
+    # Recomputes from prices and fundamentals, so it has nothing to do on a
+    # night when neither changed. See is_idle.
+    needs_new_data: bool = False
+
+
+# Everything downstream of the loaders except verify. A weekend or holiday
+# brings no new session, and these steps then recompute exactly what they
+# computed the night before: three of seven runs in the first week of October
+# 2026, about 25MB of egress each for nothing. verify is deliberately not here.
+# If the price loader ever broke and loaded nothing, every night would look idle
+# and the screen would go stale behind a run reporting success; verify's
+# freshness check is what catches that, and it costs about a megabyte.
+RECOMPUTE = ("technicals", "fundamental_scores", "zones", "backdrop", "scores",
+             "positions", "alerts", "prune")
+
+
+def is_idle(prices_before: int | None, prices_after: int | None,
+            outcomes: dict[str, str]) -> bool:
+    """Nothing new arrived tonight, so there is nothing to recompute.
+
+    By row count rather than by date: a weekend that backfills a company newly
+    added to the index brings no new session but plenty of new rows. A count it
+    could not read means not idle, because running everything is the safe way
+    to be wrong. A Sunday fundamentals refresh that succeeded is new data too.
+    """
+    if prices_before is None or prices_after is None:
+        return False
+    if outcomes.get("fundamentals") == "ok":
+        return False
+    return prices_after == prices_before
+
+
+def _price_rows(db: Db) -> int | None:
+    try:
+        return db.count("prices_daily")
+    except Exception:  # noqa: BLE001 - unknown means "run everything"
+        return None
 
 
 def plan(days: int, *, dry_run: bool, skip_fundamentals: bool) -> list[Step]:
@@ -78,6 +115,8 @@ def plan(days: int, *, dry_run: bool, skip_fundamentals: bool) -> list[Step]:
         Step("prune", "prune", common, needs=("scores",)),
         Step("verify", "verify", common),
     ]
+    for step in steps:
+        step.needs_new_data = step.name in RECOMPUTE
     return steps
 
 
@@ -96,20 +135,41 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="fundamentals change quarterly; skip on nights when nothing is due",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="recompute even if no new prices arrived (after a code change, say)",
+    )
     args = parser.parse_args(argv)
 
     steps = plan(args.days, dry_run=args.dry_run, skip_fundamentals=args.skip_fundamentals)
     outcomes: dict[str, str] = {}
     started = time.monotonic()
+    db = Db(force_dry_run=args.dry_run)
+    prices_before = _price_rows(db)
+    idle: bool | None = None          # decided at the first step that needs new data
 
     print(f"[{JOB}] starting {datetime.now():%Y-%m-%d %H:%M:%S} — {len(steps)} steps")
 
     for step in steps:
-        blockers = [n for n in step.needs if outcomes.get(n) not in ("ok", "tolerated")]
+        # "idle" satisfies a dependency: an idle technicals step left last
+        # night's output in place, which is what a dependent step would read.
+        blockers = [n for n in step.needs
+                    if outcomes.get(n) not in ("ok", "tolerated", "idle")]
         if blockers:
             outcomes[step.name] = "skipped"
             print(f"[{JOB}] SKIP {step.name}: needs {', '.join(blockers)}, which did not succeed")
             continue
+
+        if step.needs_new_data and not args.force:
+            if idle is None:
+                idle = is_idle(prices_before, _price_rows(db), outcomes)
+                if idle:
+                    print(f"[{JOB}] no new prices since the last run: nothing to recompute")
+            if idle:
+                outcomes[step.name] = "idle"
+                print(f"[{JOB}] IDLE    {step.name}")
+                continue
 
         mark = time.monotonic()
         try:
@@ -143,7 +203,10 @@ def main(argv: list[str] | None = None) -> int:
               "showing older data for those parts, not wrong data")
         return 1
 
-    print(f"\n[{JOB}] all steps completed")
+    if idle:
+        print(f"\n[{JOB}] no new prices: recompute steps idle, verify ran")
+    else:
+        print(f"\n[{JOB}] all steps completed")
     return 0
 
 

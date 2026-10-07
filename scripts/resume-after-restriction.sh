@@ -37,7 +37,10 @@ echo "2/4  backfilling the sessions missed during the outage"
 PYTHONUNBUFFERED=1 "$REPO/.venv/bin/python" -m n500.jobs.load_prices --days 35
 
 echo "3/4  rebuilding everything downstream"
-PYTHONUNBUFFERED=1 "$REPO/.venv/bin/python" -m n500.jobs.run_nightly --days 35
+# --force: the backfill above already wrote the new rows, so without it the
+# nightly would find nothing new of its own, call the night idle, and skip
+# exactly the rebuild this script exists to do.
+PYTHONUNBUFFERED=1 "$REPO/.venv/bin/python" -m n500.jobs.run_nightly --days 35 --force
 
 echo "4/4  re-enabling the timers"
 sudo systemctl enable --now n500-nightly.timer n500-live.timer

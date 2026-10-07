@@ -127,3 +127,72 @@ class TestKeysetPaging:
             key = tuple(f"c{i}" for i in range(length))
             got = db.seek_filter(key, {c: "v" for c in key})
             assert got.count(".gt.") == length
+
+
+# --- idle nights ------------------------------------------------------------
+
+from n500.jobs import run_nightly
+from n500.jobs.run_nightly import RECOMPUTE, is_idle
+
+
+class TestIsIdle:
+    def test_no_new_rows_and_no_fundamentals_is_idle(self):
+        assert is_idle(796_814, 796_814, {"prices": "ok"})
+
+    def test_new_rows_are_not_idle(self):
+        assert not is_idle(796_814, 797_550, {"prices": "ok"})
+
+    def test_a_weekend_backfill_is_not_idle(self):
+        # No new session, but a company joined the index and got its history.
+        assert not is_idle(796_814, 799_200, {"prices": "ok"})
+
+    def test_a_sunday_fundamentals_refresh_is_new_data(self):
+        assert not is_idle(796_814, 796_814, {"fundamentals": "ok"})
+
+    def test_a_failed_fundamentals_scrape_brought_nothing(self):
+        assert is_idle(796_814, 796_814, {"fundamentals": "tolerated"})
+
+    def test_an_unreadable_count_means_run_everything(self):
+        assert not is_idle(None, 796_814, {})
+        assert not is_idle(796_814, None, {})
+
+
+def test_verify_and_the_loaders_always_run():
+    steps = {s.name: s for s in plan(10, dry_run=True, skip_fundamentals=False)}
+    for name in ("universe", "prices", "index", "fundamentals", "verify"):
+        assert not steps[name].needs_new_data, name
+    assert {n for n, s in steps.items() if s.needs_new_data} == set(RECOMPUTE)
+
+
+class FakeDb:
+    def __init__(self, counts):
+        self.counts = list(counts)
+
+    def count(self, table):
+        return self.counts.pop(0) if len(self.counts) > 1 else self.counts[0]
+
+
+def run_with(monkeypatch, counts, argv=()):
+    ran = []
+    monkeypatch.setattr(run_nightly, "Db", lambda **kw: FakeDb(counts))
+    monkeypatch.setattr(run_nightly, "run_step", lambda step: (ran.append(step.name), ("ok", None))[1])
+    monkeypatch.setattr(run_nightly, "_record", lambda *a, **k: None)
+    code = run_nightly.main(["--skip-fundamentals", *argv])
+    return code, ran
+
+
+def test_an_idle_night_runs_the_loaders_and_verify_only_and_succeeds(monkeypatch):
+    code, ran = run_with(monkeypatch, [796_814, 796_814])
+    assert code == 0, "an idle night is not a failure; it must not notify"
+    assert ran == ["universe", "prices", "index", "verify"]
+
+
+def test_a_night_with_new_prices_runs_everything(monkeypatch):
+    code, ran = run_with(monkeypatch, [796_814, 797_550])
+    assert code == 0
+    assert set(RECOMPUTE) <= set(ran)
+
+
+def test_force_recomputes_an_idle_night(monkeypatch):
+    code, ran = run_with(monkeypatch, [796_814, 796_814], argv=["--force"])
+    assert set(RECOMPUTE) <= set(ran)
