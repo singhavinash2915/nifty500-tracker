@@ -155,3 +155,19 @@ class TestShape:
         pricecache.sync(db, verbose=False)
         got = pricecache.load("symbol,date,adj_close")
         assert list(got.columns) == ["symbol", "date", "adj_close"]
+
+
+class TestAdd:
+    def test_rows_added_after_a_backfill_keep_the_mirror_level(self):
+        """A backfill writes years-old rows no overlap window reaches. Mirrored
+        at the same time, the next sync finds the counts equal and does not
+        rebuild."""
+        db = FakeDb(bars("AAA", "2026-01-01", 40))
+        pricecache.sync(db, verbose=False)
+        old = bars("NEW", "2022-01-03", 30)
+        db.rows.extend(old)                       # the backfill's database write
+        pricecache.add(old)                       # and its mirror write
+        db.requests.clear()
+        pricecache.sync(db, verbose=False)
+        assert all(since is not None for _, since in db.requests)   # no full read
+        assert pricecache.row_count() == db.count("prices_daily")

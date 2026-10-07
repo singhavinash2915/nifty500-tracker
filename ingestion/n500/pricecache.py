@@ -44,15 +44,18 @@ from pathlib import Path
 
 import pandas as pd
 
-__all__ = ["path", "sync", "frame", "load", "symbols", "row_count"]
+__all__ = ["path", "sync", "frame", "load", "symbols", "row_count", "bar_stats", "add"]
 
 TABLE = "prices_daily"
 COLUMNS = ("symbol", "date", "open", "high", "low", "close", "adj_close", "volume")
 
-# How far back to re-read on every sync. Cheap insurance: a week of bars for the
-# whole universe is a few thousand rows, and it is the difference between a
-# revised close being corrected and being wrong forever.
-OVERLAP_DAYS = 7
+# How far back to re-read on every sync. Cheap insurance: two weeks of bars for
+# the whole universe is a few thousand rows, and it is the difference between a
+# revised close being corrected and being wrong forever. It must exceed the
+# nightly load window (10 days): at 7, a company joining the index brought
+# rows older than the overlap, the counts disagreed, and the whole mirror was
+# rebuilt from scratch, about 115MB of egress on a hosted project.
+OVERLAP_DAYS = 14
 
 
 def path() -> Path:
@@ -182,3 +185,24 @@ def load(columns: str = "*", *, since: str | None = None) -> pd.DataFrame:
     sql += " ORDER BY symbol, date"
     with closing(_connect()) as conn:
         return pd.DataFrame(conn.execute(sql, params).fetchall(), columns=cols)
+
+
+def bar_stats() -> dict[str, tuple[int, date]]:
+    """{symbol: (bars, first date)} for every symbol in the mirror."""
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            f"SELECT symbol, count(*), min(date) FROM {TABLE} GROUP BY symbol").fetchall()
+    return {s: (int(n), date.fromisoformat(f)) for s, n, f in rows}
+
+
+def add(rows: list[dict]) -> int:
+    """Put rows just written to the database into the mirror as well.
+
+    For a backfill. Its rows are years old, so no overlap window reaches them:
+    the next sync would find the counts apart and rebuild the whole mirror,
+    about 115MB of egress on a hosted project at every index rebalance. Called
+    only after the database write succeeded, so the mirror never holds a row
+    the database does not; the count check still runs on every sync.
+    """
+    with closing(_connect()) as conn:
+        return _write(conn, rows)
