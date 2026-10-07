@@ -77,6 +77,13 @@ MIN_EXPECTED_EQUITIES = 1200
 # later reads as a corporate action. ITI sat in BE for 61 straight sessions.
 EQUITY_SERIES = frozenset({"EQ", "BE", "BZ"})
 
+# REIT units. Not equity, so named apart from EQUITY_SERIES, but priced:
+# three REITs are Nifty 500 members since September 2026 and were
+# unscoreable without their bars. InvITs (series IV) are not members and
+# stay out.
+UNIT_SERIES = frozenset({"RR"})
+PRICED_SERIES = EQUITY_SERIES | UNIT_SERIES
+
 # Overnight moves outside this band are candidate corporate actions. The
 # magnitude threshold is the actual detector — snapping only refines the
 # factor afterwards. 0.78 catches a 1:3 bonus (0.75) with margin while staying
@@ -236,7 +243,7 @@ def parse(text: str, *, on: date | None = None) -> dict[str, Quote]:
     for row in reader:
         # EQUITY_SERIES excludes SME, ETFs and government bonds; STK excludes
         # index and stock derivatives.
-        if row["SctySrs"] not in EQUITY_SERIES or row["FinInstrmTp"] != "STK":
+        if row["SctySrs"] not in PRICED_SERIES or row["FinInstrmTp"] != "STK":
             continue
 
         symbol = row["TckrSymb"].strip().upper()
@@ -280,7 +287,7 @@ def _parse_legacy(text: str, *, on: date | None = None) -> dict[str, Quote]:
     """The pre-2024 layout, mapped onto the same Quote."""
     quotes: dict[str, Quote] = {}
     for row in csv.DictReader(io.StringIO(text)):
-        if (row.get("SERIES") or "").strip() not in EQUITY_SERIES:
+        if (row.get("SERIES") or "").strip() not in PRICED_SERIES:
             continue
         symbol = row["SYMBOL"].strip().upper()
         try:

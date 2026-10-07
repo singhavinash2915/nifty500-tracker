@@ -172,6 +172,9 @@ def parse_csv(text: str) -> list[Constituent]:
                 industry=industry,
                 isin=isin,
                 series=series,
+                # Units of a trust, not shares. Typed so the fundamentals jobs
+                # leave them alone; see migration 0025.
+                instrument_type="reit" if series == "RR" else "equity",
             )
         )
 

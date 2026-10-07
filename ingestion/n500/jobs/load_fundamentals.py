@@ -186,7 +186,9 @@ def main(argv: list[str] | None = None) -> int:
         universe = sorted(
             row["symbol"]
             for row in db.select("stocks", "symbol,is_active,instrument_type")
-            if row.get("is_active", True) and row.get("instrument_type") != "etf"
+            # Equity only: ETFs have no statements, and a REIT's would be read
+            # as a company's. See migration 0025.
+            if row.get("is_active", True) and row.get("instrument_type", "equity") == "equity"
         )
     if args.limit:
         universe = universe[: args.limit]

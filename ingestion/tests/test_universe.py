@@ -34,6 +34,14 @@ def test_quoted_company_names_with_commas_survive():
     assert parsed[0].company_name == "Bajaj Finance, Ltd."
 
 
+def test_a_reit_is_typed_as_one_so_fundamentals_leave_it_alone():
+    text = make_csv(500) + "Embassy Office Parks REIT,Realty,EMBASSY,RR,INE041025011\n"
+    parsed = parse_csv(text)
+    reits = [c for c in parsed if c.instrument_type == "reit"]
+    assert [c.symbol for c in reits] == ["EMBASSY"]
+    assert all(c.instrument_type == "equity" for c in parsed if c.series == "EQ")
+
+
 def test_rejects_a_changed_header():
     text = "Name,Sector,Ticker\nfoo,bar,baz\n"
     with pytest.raises(UniverseParseError, match="unexpected header"):

@@ -151,6 +151,11 @@ def main(argv: list[str] | None = None) -> int:
     as_of = date.fromisoformat(args.as_of) if args.as_of else date.today()
 
     stocks = pd.DataFrame(db.select("stocks"))
+    # Equity only. REIT statements were already scraped before they were
+    # typed (migration 0025), and scored here they would read as a
+    # company's: a value score for a trust that pays out everything.
+    if "instrument_type" in stocks:
+        stocks = stocks[stocks["instrument_type"].fillna("equity") == "equity"]
     annual = pd.DataFrame(db.select("fundamentals_y"))
     quarterly = pd.DataFrame(db.select("fundamentals_q"))
     holding = pd.DataFrame(db.select("shareholding"))

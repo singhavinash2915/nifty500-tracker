@@ -195,6 +195,17 @@ def test_bz_series_is_kept_too():
     assert "WATCHED" in bhavcopy.parse(text)
 
 
+def test_reit_units_are_priced_but_invits_are_not():
+    """Three REITs joined the Nifty 500 in September 2026 and trade in series
+    RR, which the loader skipped, so they could not be scored."""
+    text = HEADER + row("EMBASSY", series="RR") + row("INDIGRID", series="IV") + "".join(
+        row(f"S{i}") for i in range(1500)
+    )
+    quotes = bhavcopy.parse(text)
+    assert "EMBASSY" in quotes
+    assert "INDIGRID" not in quotes     # InvIT: not an index member
+
+
 def test_no_action_is_inferred_across_a_gap_in_history():
     """A three-month hole must not be read as a split: the two closes either
     side of a suspension are unrelated."""
