@@ -91,6 +91,29 @@ def test_score_decay_fires_only_below_the_floor():
     assert rules.score_decayed(position(), score(decile=None)) is None
 
 
+def test_score_decay_follows_conviction_when_there_is_one():
+    # HDFCBANK, 7 October: 4th on the buy list by conviction, and told the
+    # same night its case had weakened, because the rule read the blend.
+    strong_conviction = score(decile=4, conviction_decile=10)
+    assert rules.score_decayed(position(), strong_conviction) is None
+
+    weak_conviction = score(decile=10, conviction_decile=3)
+    alert = rules.score_decayed(position(), weak_conviction)
+    assert alert is not None and alert.message.startswith("conviction")
+
+
+def test_score_decay_falls_back_to_the_blend_without_conviction():
+    # An ETF with too few signals for a conviction score keeps its alert.
+    alert = rules.score_decayed(position(), score(decile=3, conviction_decile=None))
+    assert alert is not None and alert.message.startswith("blended score")
+
+
+def test_the_two_scores_dedupe_separately():
+    a = rules.score_decayed(position(), score(conviction_decile=4))
+    b = rules.score_decayed(position(), score(decile=4, conviction_decile=None))
+    assert a.payload["dedupe"] != b.payload["dedupe"]
+
+
 # --- transitions, not states ----------------------------------------------
 
 

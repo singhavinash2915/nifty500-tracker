@@ -113,16 +113,26 @@ def thesis_broken(position: dict, today: dict) -> Alert | None:
 
 
 def score_decayed(position: dict, today: dict, *, floor: int = 7) -> Alert | None:
-    """The score that justified the entry has fallen out of the top deciles."""
-    decile = _number(today.get("decile"))
+    """The score that justified the entry has fallen out of the top deciles.
+
+    Conviction first, because it is what ranks the buy list. This rule read the
+    blended score's decile, so a holding could rank 4th on the buy list and be
+    told on the same night that its case had weakened: HDFCBANK on 7 October.
+    The blended decile is the fallback for a holding with no conviction score
+    (too few signals, as some ETFs have), so no holding loses the alert.
+    """
+    decile = _number(today.get("conviction_decile"))
+    score = "conviction"
+    if decile is None:
+        decile, score = _number(today.get("decile")), "blended score"
     if decile is None or int(decile) >= floor:
         return None
     return Alert(
         symbol=position["symbol"],
         rule="score_decayed",
         severity=Severity.ACTION,
-        message=f"has slipped to decile {int(decile)} — the entry case has weakened",
-        payload={"decile": int(decile), "dedupe": int(decile)},
+        message=f"{score} has slipped to decile {int(decile)} — the entry case has weakened",
+        payload={"decile": int(decile), "score": score, "dedupe": f"{score}:{int(decile)}"},
     )
 
 
