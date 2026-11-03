@@ -44,6 +44,18 @@ def trading_day_candidates(days: int, *, end: date | None = None) -> list[date]:
     return sorted(end - timedelta(days=offset) for offset in range(days))
 
 
+# Days whose file could not be fetched in this run. A 404 is an answer: the day
+# had no session, or it is not published yet. These are the opposite, no answer
+# at all, usually a Mac waking in the background with no network. Without this
+# the nightly saw no new rows, called the night idle and exited 0, and a trading
+# day arrived late with nothing said: 23 October and 2 November 2026.
+_failed_days: set[str] = set()
+
+
+def failed_days() -> list[str]:
+    return sorted(_failed_days)
+
+
 def needs_backfill(
     stats: dict[str, tuple[int, date]],
     active: set[str],
@@ -96,6 +108,7 @@ def collect(client, days: int, symbols: set[str], log, *, pause: float,
             continue
         except (BhavcopyError, httpx.HTTPError) as exc:
             log.error(day.isoformat(), str(exc))
+            _failed_days.add(day.isoformat())
             continue
 
         for symbol in symbols & quotes.keys():
@@ -126,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    _failed_days.clear()
     db = Db(force_dry_run=args.dry_run)
 
     if args.symbols:

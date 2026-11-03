@@ -196,3 +196,24 @@ def test_a_night_with_new_prices_runs_everything(monkeypatch):
 def test_force_recomputes_an_idle_night(monkeypatch):
     code, ran = run_with(monkeypatch, [796_814, 796_814], argv=["--force"])
     assert set(RECOMPUTE) <= set(ran)
+
+
+# --- a fetch that failed is not a night with no prices -----------------------
+
+
+def test_a_failed_fetch_is_incomplete_not_idle(monkeypatch):
+    # 2 November 2026: no network on a background wake, no new rows, exit 0.
+    from n500.jobs import load_prices
+    monkeypatch.setattr(load_prices, "_failed_days", {"2026-11-02"})
+    code, ran = run_with(monkeypatch, [796_814, 796_814])
+    assert code == run_nightly.EXIT_INCOMPLETE
+    assert "verify" in ran
+
+
+def test_a_real_failure_outranks_an_incomplete_run(monkeypatch):
+    from n500.jobs import load_prices
+    monkeypatch.setattr(load_prices, "_failed_days", {"2026-11-02"})
+    monkeypatch.setattr(run_nightly, "Db", lambda **kw: FakeDb([1, 2]))
+    monkeypatch.setattr(run_nightly, "run_step", lambda step: ("failed", "boom") if step.name == "verify" else ("ok", None))
+    monkeypatch.setattr(run_nightly, "_record", lambda *a, **k: None)
+    assert run_nightly.main(["--skip-fundamentals"]) == 1

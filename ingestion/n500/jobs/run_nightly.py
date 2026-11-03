@@ -25,8 +25,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from ..db import Db
+from . import load_prices
 
 JOB = "run_nightly"
+
+# The run worked but could not reach a price file, so what it did may be
+# missing a session. nightly.sh tries again later rather than alarming at once.
+EXIT_INCOMPLETE = 75
 
 
 @dataclass
@@ -196,12 +201,18 @@ def main(argv: list[str] | None = None) -> int:
     for name, status in outcomes.items():
         print(f"  {status:9} {name}")
 
-    _record(args.dry_run, outcomes, failed=failed, skipped=skipped)
+    missed = load_prices.failed_days()
+    _record(args.dry_run, outcomes, failed=failed, skipped=skipped, incomplete=missed)
 
     if failed or skipped:
         print(f"\n[{JOB}] {len(failed)} failed, {len(skipped)} skipped — the screener is "
               "showing older data for those parts, not wrong data")
         return 1
+
+    if missed:
+        # Worded for the grep in nightly.sh, which puts it in the notification.
+        print(f"\n[{JOB}] INCOMPLETE could not fetch prices for {', '.join(missed)}")
+        return EXIT_INCOMPLETE
 
     if idle:
         print(f"\n[{JOB}] no new prices: recompute steps idle, verify ran")
@@ -211,7 +222,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _record(
-    dry_run: bool, outcomes: dict[str, str], *, failed: list[str], skipped: list[str]
+    dry_run: bool, outcomes: dict[str, str], *, failed: list[str], skipped: list[str],
+    incomplete: list[str] = (),
 ) -> None:
     """Write an ingestion_runs row for every run, not only the bad ones.
 
@@ -228,12 +240,13 @@ def _record(
         run_id = db.start_run(JOB)
         db.finish_run(
             run_id,
-            status="partial" if (failed or skipped) else "ok",
+            status="partial" if (failed or skipped or incomplete) else "ok",
             symbols_ok=sum(1 for s in outcomes.values() if s in ("ok", "tolerated")),
             symbols_failed=len(failed) + len(skipped),
             errors=[{"symbol": name, "error": status}
                     for name, status in outcomes.items() if status in ("failed", "skipped")],
-            notes="; ".join(f"{n}={s}" for n, s in outcomes.items()),
+            notes="; ".join(f"{n}={s}" for n, s in outcomes.items())
+            + (f"; could not fetch {', '.join(incomplete)}" if incomplete else ""),
         )
     except Exception:  # noqa: BLE001 - never let bookkeeping mask the real failure
         pass

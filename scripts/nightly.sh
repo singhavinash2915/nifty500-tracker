@@ -11,7 +11,23 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$REPO/data/logs"
 mkdir -p "$LOG_DIR"
-LOG="$LOG_DIR/nightly-$(date +%Y-%m-%d).log"
+TODAY="$(date +%Y-%m-%d)"
+LOG="$LOG_DIR/nightly-$TODAY.log"
+
+# launchd fires this at 19:15 and again later in the evening, and at wake for a
+# slot missed while the Mac slept. A background wake often has no network, so one
+# attempt can fail through no fault of the pipeline. Once a run has finished the
+# day, the later slots stop here.
+#
+# Only a run started from 19:00 finishes the day, since NSE publishes in the
+# evening. A catch-up at 08:00 fills in whatever was missed and leaves tonight's
+# run to happen.
+DONE_MARKER="$LOG_DIR/.nightly-done"
+HOUR="${NIGHTLY_HOUR:-$(date +%H)}"
+HOUR=$((10#$HOUR))
+if [ "$(cat "$DONE_MARKER" 2>/dev/null)" = "$TODAY" ]; then
+  exit 0
+fi
 
 cd "$REPO/ingestion" || exit 1
 
@@ -61,10 +77,17 @@ notify() {
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') exit $STATUS ==="
 } >> "$LOG" 2>&1
 
-if [ "$STATUS" -ne 0 ]; then
+if [ "$STATUS" -eq 0 ] && [ "$HOUR" -ge 19 ]; then
+  echo "$TODAY" > "$DONE_MARKER"
+fi
+
+# 75 is run_nightly's EXIT_INCOMPLETE: it could not reach a price file. A later
+# slot will probably manage, so that is only worth interrupting anyone for once
+# the last slot of the evening has also failed. Anything else is a real fault.
+if [ "$STATUS" -ne 0 ] && { [ "$STATUS" -ne 75 ] || [ "$HOUR" -ge 23 ]; }; then
   # The last line naming a step is the most useful thing to put in four inches
   # of notification — "FAILED universe" says more than "exit 1".
-  DETAIL="$(grep -E 'FAILED|check\(s\) failed' "$LOG" | tail -1 | cut -c1-120)"
+  DETAIL="$(grep -E 'FAILED|INCOMPLETE|check\(s\) failed' "$LOG" | tail -1 | cut -c1-120)"
   notify "Nifty 500 tracker — nightly failed" "${DETAIL:-see $LOG}"
 fi
 

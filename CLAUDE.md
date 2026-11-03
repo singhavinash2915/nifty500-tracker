@@ -38,6 +38,10 @@ which holds `scores_daily`, `ts_setups` and `fundamental_scores` to 120 days.
 On a night with no new prices (weekends, holidays) the recompute steps are
 skipped as `idle` and only the loaders and `verify` run; `--force` recomputes
 anyway, which a manual run after a code change needs.
+launchd fires `scripts/nightly.sh` at 19:15, 20:30, 22:00 and 23:30, and once a run
+started from 19:00 succeeds the later slots exit at once. A price file that could
+not be fetched exits 75 (incomplete), which only notifies from the 23:30 slot. To
+change the slots, edit the plist and reinstall it in `~/Library/LaunchAgents`.
 Every job records the bytes it read in `ingestion_runs.bytes_read`; `verify`
 fails the run once the month passes the pipeline's 1GB egress budget.
 
