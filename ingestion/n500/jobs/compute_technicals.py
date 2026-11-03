@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     db = Db(force_dry_run=args.dry_run)
     # Prices come from the local mirror; this is the only step that talks to
     # the database about them, and after the first night it asks for a week.
-    pricecache.sync(db)
+    pricecache.ensure(db)
 
     # Symbols first, prices one at a time below. Loading the whole price table
     # cost about 450MB and then accumulating every output row as a dict before a

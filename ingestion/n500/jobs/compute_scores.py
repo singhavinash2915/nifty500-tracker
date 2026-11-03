@@ -32,6 +32,7 @@ import pandas as pd
 
 from ..config import DATA_DIR, settings
 from ..db import Db, run
+from .. import pricecache
 from ..scoring import buylist, conviction, momentum, redflags, regime
 from ..scoring.ranking import peer_groups
 
@@ -96,6 +97,39 @@ def build_snapshot(technicals: pd.DataFrame, prices: pd.DataFrame, stocks: pd.Da
     return snapshot
 
 
+def _setup_window(db: Db, symbols: list[str], *, since: str) -> pd.DataFrame:
+    """What the window of `ts_setups` is used for, without reading all of it.
+
+    Scoring wants two things: each symbol's latest row, and whether an event
+    fired on any row before it. So this reads the latest rows whole and, from
+    older ones, only the rows where an event fired and only the flag columns.
+    Reading every row and column was 15MB a night and heading for 50MB as the
+    table filled up its 120 days of retention.
+    """
+    latest = pd.DataFrame(db.latest_per_symbol("ts_setups", symbols, since=since))
+    if latest.empty:
+        return latest
+
+    fired = ",".join(
+        f"{name}.not.is.null" if name == "false_breakout" else f"{name}.is.true"
+        for name in conviction.EVENT_FEATURES
+    )
+    events = pd.DataFrame(db.select(
+        "ts_setups",
+        "symbol,date," + ",".join(conviction.EVENT_FEATURES),
+        since=("date", since),
+        any_of=fired,
+    ))
+    if events.empty:
+        return latest
+    # The latest rows are already here, whole. A second, flags-only copy of one
+    # could be taken as the symbol's latest and blank its other columns.
+    latest_dates = set(zip(latest["symbol"], latest["date"].astype(str)))
+    older = [(s, str(d)) not in latest_dates for s, d in zip(events["symbol"], events["date"])]
+    events = events[older]
+    return pd.concat([latest, events], ignore_index=True) if len(events) else latest
+
+
 ARCHIVE_DIR = DATA_DIR / "archive" / "scores"
 ARCHIVE_COLUMNS = (
     "symbol", "date", "close", "blended", "conviction", "conviction_decile",
@@ -131,13 +165,14 @@ def main(argv: list[str] | None = None) -> int:
     # reading them whole is 775 paged requests that get slower with depth. A
     # fortnight covers any gap a holiday or a suspension can open.
     recent = (date.today() - timedelta(days=21)).isoformat()
-    technicals = pd.DataFrame(
-        db.select("technicals_daily", since=("date", recent))
-    )
-    prices = pd.DataFrame(
-        db.select("prices_daily", columns="symbol,date,adj_close", since=("date", recent))
-    )
     stocks = pd.DataFrame(db.select("stocks"))
+    wanted = (
+        [r["symbol"] for r in stocks.to_dict("records") if r.get("is_active", True)]
+        if not stocks.empty else []
+    )
+    technicals = pd.DataFrame(db.latest_per_symbol("technicals_daily", wanted, since=recent))
+    pricecache.ensure(db)
+    prices = pricecache.load("symbol,date,adj_close", since=recent)
 
     if technicals.empty or prices.empty or stocks.empty:
         print(f"[{JOB}] missing inputs — run the earlier jobs first", file=sys.stderr)
@@ -147,6 +182,10 @@ def main(argv: list[str] | None = None) -> int:
     if snapshot.empty:
         print(f"[{JOB}] nothing to score", file=sys.stderr)
         return 1
+    # Ties in the deciles and the buy list are broken by row order, so fix the
+    # order. It came from whichever way the rows were read, which let two stocks
+    # at exactly 44.83 swap deciles when a read changed.
+    snapshot = snapshot.sort_index()
 
     as_of = snapshot["date"].max().date()
 
@@ -198,11 +237,8 @@ def main(argv: list[str] | None = None) -> int:
     # printed yesterday describes a situation that is still true today, and
     # expiring it overnight churned nine of every ten names on the buy list.
     # 130 calendar days comfortably contains 63 trading sessions.
-    setups = pd.DataFrame(
-        db.select(
-            "ts_setups",
-            since=("date", (date.today() - timedelta(days=130)).isoformat()),
-        )
+    setups = _setup_window(
+        db, wanted, since=(date.today() - timedelta(days=130)).isoformat()
     )
     ts = pd.Series(np.nan, index=snapshot.index, dtype="float64")
     status = pd.Series("none", index=snapshot.index, dtype="object")

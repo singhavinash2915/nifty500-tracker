@@ -315,8 +315,8 @@ def check_prices(db: Db) -> list[Check]:
 
 
 # The free plan allows 5GB of egress a month for the whole organization. The
-# pipeline gets a fifth of it and the web app the rest. Measured after the
-# fixes of September 2026 the pipeline needs about 13MB a night, roughly 400MB a
+# pipeline gets a fifth of it and the web app the rest. Measured in November
+# 2026 a full night reads about 12MB and an idle one about 3MB, roughly 300MB a
 # month, so reaching this budget means something regressed.
 EGRESS_QUOTA = 5 * 1024**3
 PIPELINE_EGRESS_BUDGET = EGRESS_QUOTA // 5

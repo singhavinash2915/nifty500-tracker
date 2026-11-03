@@ -312,6 +312,7 @@ class Db:
         *,
         where: dict[str, Any] | None = None,
         since: tuple[str, Any] | None = None,
+        any_of: str | None = None,
         page_size: int = 1000,
     ) -> list[dict[str, Any]]:
         """Read a whole table, paging through PostgREST's row cap.
@@ -334,6 +335,10 @@ class Db:
 
         `since` is a `(column, value)` pair applied as `>=`. Still worth using
         where a job only wants recent rows: fewer requests beats faster ones.
+
+        `any_of` is a PostgREST `or` expression that narrows what is sent. It
+        is a saving rather than a guarantee: a dry run ignores it and returns
+        the wider set, so a caller must still read the rows it gets correctly.
         """
         if self.dry_run:
             path = DRYRUN_DIR / f"{table}.json"
@@ -364,6 +369,8 @@ class Db:
                 query = query.eq(column, value)
             if since is not None:
                 query = query.gte(since[0], since[1])
+            if any_of is not None:
+                query = query.or_(any_of)
             for column in order_by:
                 query = query.order(column)
             if cursor is not None:
@@ -404,7 +411,45 @@ class Db:
             found.append(page[0][column])
         return found
 
-    def select_latest(self, table: str, column: str = "date") -> list[dict[str, Any]]:
+    def latest_per_symbol(
+        self,
+        table: str,
+        symbols: Sequence[str],
+        *,
+        since: str,
+        columns: str = "*",
+    ) -> list[dict[str, Any]]:
+        """Each symbol's most recent row on or after `since`.
+
+        The same answer as reading the whole window and taking the last row per
+        symbol, which is what `compute_scores` did: 15MB of `ts_setups` and 7MB
+        of technicals a night, growing with the table, to use one row each.
+        The newest date holds nearly everyone, so it is read whole, and a symbol
+        not on it (suspended, or too new to have a row) is asked for alone.
+        """
+        rows = [r for r in self.select_latest(table, columns=columns)
+                if str(r["date"]) >= since]
+        have = {r["symbol"] for r in rows}
+        for symbol in sorted(set(symbols) - have):
+            found = self.select(table, columns, where={"symbol": symbol}, since=("date", since))
+            if found:
+                rows.append(max(found, key=lambda r: str(r["date"])))
+        return rows
+
+    def last_started(self, job: str) -> str | None:
+        """When `job` last started, whether or not it finished. One row."""
+        if self.dry_run:
+            return None
+        page = (
+            self._client.table("ingestion_runs").select("started_at")
+            .eq("job", job).order("id", desc=True).limit(1).execute().data
+        )
+        self.bytes_read += len(json.dumps(page, default=str))
+        return page[0]["started_at"] if page else None
+
+    def select_latest(
+        self, table: str, column: str = "date", *, columns: str = "*"
+    ) -> list[dict[str, Any]]:
         """Every row from the most recent `column` value, and nothing older.
 
         For tables written in full each night (`fundamental_scores`,
@@ -413,7 +458,7 @@ class Db:
         grows every night.
         """
         latest = self.recent_values(table, column, 1)
-        return self.select(table, where={column: latest[0]}) if latest else []
+        return self.select(table, columns, where={column: latest[0]}) if latest else []
 
     def insert(self, table: str, rows: Sequence[dict[str, Any]]) -> int:
         """Plain insert, for rows whose primary key the database assigns.

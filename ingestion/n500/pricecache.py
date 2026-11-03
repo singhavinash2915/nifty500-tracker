@@ -44,9 +44,10 @@ from pathlib import Path
 
 import pandas as pd
 
-__all__ = ["path", "sync", "frame", "load", "symbols", "row_count", "bar_stats", "add"]
+__all__ = ["path", "sync", "frame", "load", "symbols", "row_count", "bar_stats", "add", "ensure"]
 
 TABLE = "prices_daily"
+_level_at: int | None = None      # row count at this process's last sync
 COLUMNS = ("symbol", "date", "open", "high", "low", "close", "adj_close", "volume")
 
 # How far back to re-read on every sync. Cheap insurance: two weeks of bars for
@@ -141,9 +142,25 @@ def sync(db, *, overlap_days: int = OVERLAP_DAYS, verbose: bool = True) -> int:
             fetched += _write(conn, db.select(TABLE, ",".join(COLUMNS)))
         reason += ", rebuilt"
 
+    global _level_at
+    _level_at = row_count()
     if verbose:
-        print(f"[pricecache] {fetched} rows fetched ({reason}), {row_count()} cached")
+        print(f"[pricecache] {fetched} rows fetched ({reason}), {_level_at} cached")
     return fetched
+
+
+def ensure(db) -> int:
+    """`sync`, unless this process already synced and the table has not moved.
+
+    A nightly runs its jobs in one process, and five of them synced in turn,
+    fetching the same two weeks of bars five times with nothing written in
+    between: 5MB a night. The count costs one request and no rows.
+    """
+    if getattr(db, "dry_run", False):
+        return 0
+    if _level_at is not None and db.count(TABLE) == _level_at:
+        return 0
+    return sync(db)
 
 
 def symbols() -> list[str]:
@@ -204,5 +221,8 @@ def add(rows: list[dict]) -> int:
     only after the database write succeeded, so the mirror never holds a row
     the database does not; the count check still runs on every sync.
     """
+    global _level_at
     with closing(_connect()) as conn:
-        return _write(conn, rows)
+        written = _write(conn, rows)
+    _level_at = row_count()
+    return written

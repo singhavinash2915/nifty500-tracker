@@ -94,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     db = Db(force_dry_run=args.dry_run)
-    pricecache.sync(db)
+    pricecache.ensure(db)
 
     # Symbols first, prices per symbol inside the loop. Reading the whole table
     # was 776,300 rows and about 450MB, and on the server it crossed the

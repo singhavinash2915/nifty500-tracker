@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from ..db import Db, run
-from .. import pricecache
+from .. import pricecache, tablecache
 from ..scoring import ownership, quality, redflags, revision, value
 
 JOB = "compute_fundamental_scores"
@@ -156,14 +156,14 @@ def main(argv: list[str] | None = None) -> int:
     # company's: a value score for a trust that pays out everything.
     if "instrument_type" in stocks:
         stocks = stocks[stocks["instrument_type"].fillna("equity") == "equity"]
-    annual = pd.DataFrame(db.select("fundamentals_y"))
-    quarterly = pd.DataFrame(db.select("fundamentals_q"))
-    holding = pd.DataFrame(db.select("shareholding"))
-    company_ratios = pd.DataFrame(db.select("company_ratios"))
+    annual = pd.DataFrame(tablecache.weekly_table(db, "fundamentals_y"))
+    quarterly = pd.DataFrame(tablecache.weekly_table(db, "fundamentals_q"))
+    holding = pd.DataFrame(tablecache.weekly_table(db, "shareholding"))
+    company_ratios = pd.DataFrame(tablecache.weekly_table(db, "company_ratios"))
     # Only the three columns the PE-history median needs. Reading all eight
     # of them for 778,000 rows was a quarter of a gigabyte a night for a
     # calculation that uses one of the columns.
-    pricecache.sync(db)
+    pricecache.ensure(db)
     prices = pricecache.load("symbol,date,adj_close")
     if not prices.empty:
         prices["date"] = pd.to_datetime(prices["date"])

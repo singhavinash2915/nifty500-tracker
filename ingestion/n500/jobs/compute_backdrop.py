@@ -26,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     db = Db(force_dry_run=args.dry_run)
-    pricecache.sync(db)
+    pricecache.ensure(db)
 
     with run(JOB, db=db) as log:
         backdrop = regime.measure(pricecache.load("symbol,date,adj_close"))
