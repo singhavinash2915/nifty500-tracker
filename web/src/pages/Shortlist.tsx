@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AlertTriangle } from 'lucide-react'
-import type { MarketBackdrop as Backdrop, ScreenerRow } from '../types'
+import type { MarketBackdrop as Backdrop, MonthlyPick, ScreenerRow } from '../types'
 import { pct, share } from '../lib/format'
-import { loadBackdrop, loadPlans, loadPortfolio, type PortfolioSettings, type PositionView } from '../lib/load'
+import { loadBackdrop, loadMonthlyPicks, loadPlans, loadPortfolio, type PortfolioSettings, type PositionView } from '../lib/load'
 import { FADING_FLAG_AT, featureLabel } from '../lib/features'
 import { MarketBackdrop } from '../components/MarketBackdrop'
+import { MonthlyPicks } from '../components/MonthlyPicks'
 import { basketEffect, buildShortlist, capacity, type Candidate } from '../lib/shortlist'
 
 const rupees = (v: number | null | undefined) =>
@@ -25,15 +26,19 @@ export function Shortlist({ rows }: { rows: ScreenerRow[] }) {
   const [loading, setLoading] = useState(true)
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [backdrop, setBackdrop] = useState<Backdrop | null>(null)
+  const [monthly, setMonthly] = useState<MonthlyPick[]>([])
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([loadPortfolio(), loadPlans(), loadBackdrop()]).then(([portfolio, planMap, market]) => {
+    Promise.all([
+      loadPortfolio(), loadPlans(), loadBackdrop(), loadMonthlyPicks(),
+    ]).then(([portfolio, planMap, market, locked]) => {
       if (cancelled) return
       setHeld(portfolio.positions)
       setSettings(portfolio.settings)
       setPlans(planMap)
       setBackdrop(market)
+      setMonthly(locked)
       setLoading(false)
     })
     return () => {
@@ -71,6 +76,8 @@ export function Shortlist({ rows }: { rows: ScreenerRow[] }) {
       </p>
 
       {!loading && <MarketBackdrop compact data={backdrop} />}
+
+      {!loading && <MonthlyPicks picks={monthly} rows={rows} held={held} settings={settings} />}
 
       {loading ? (
         <p className="text-sm text-slate-500">Loading…</p>

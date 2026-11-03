@@ -38,6 +38,8 @@ which holds `scores_daily`, `ts_setups` and `fundamental_scores` to 120 days.
 On a night with no new prices (weekends, holidays) the recompute steps are
 skipped as `idle` and only the loaders and `verify` run; `--force` recomputes
 anyway, which a manual run after a code change needs.
+`compute_monthly_picks` locks 3 stocks a month from the first scored session (see
+`scoring/picks.py`); a locked month is never rewritten. They show on the Buy list page.
 launchd fires `scripts/nightly.sh` at 19:15, 20:30, 22:00 and 23:30, and once a run
 started from 19:00 succeeds the later slots exit at once. A price file that could
 not be fetched exits 75 (incomplete), which only notifies from the 23:30 slot. To

@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { AlertRow, Bars, MarketBackdrop, PeriodRecord, ScreenerRow, ScreenerSnapshot, StockDetail, Zone } from '../types'
+import type { AlertRow, Bars, MarketBackdrop, MonthlyPick, PeriodRecord, ScreenerRow, ScreenerSnapshot, StockDetail, Zone } from '../types'
 
 // Two years of daily bars are shown, but the moving averages are computed over
 // a longer window so the 200DMA has a value on the very first visible bar
@@ -360,7 +360,7 @@ export async function loadPortfolio(): Promise<{
         // these symbols ever had — years of daily history to display one number
         // each — and PostgREST answers with its first 1000 rows and no error,
         // so it was correct only for as long as the holdings stayed few.
-        supabase.from('scores_daily').select('*').in('symbol', symbols)
+        supabase.from('scores_daily').select('*, stocks(sector)').in('symbol', symbols)
           .gte('date', recentDate(90))
           .order('date', { ascending: false })
           .limit(symbols.length * 5),
@@ -901,5 +901,36 @@ export async function loadBackdrop(): Promise<MarketBackdrop | null> {
     } as MarketBackdrop
   } catch {
     return null
+  }
+}
+
+/**
+ * The latest month's locked picks. Private, like positions, and empty rather
+ * than an error for anyone not signed in or a database without any yet.
+ */
+export async function loadMonthlyPicks(): Promise<MonthlyPick[]> {
+  if (!supabase) return []
+  try {
+    const { data, error } = await supabase
+      .from('monthly_picks')
+      .select('*')
+      .order('month', { ascending: false })
+      .order('rank')
+      .limit(3)
+    if (error || !data?.length) return []
+    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
+    return data
+      .filter((r) => r.month === data[0].month)
+      .map((r) => ({
+        ...r,
+        conviction: Number(r.conviction),
+        close: Number(r.close),
+        stop: Number(r.stop),
+        target: num(r.target),
+        position_budget: num(r.position_budget),
+        risk_budget: num(r.risk_budget),
+      })) as MonthlyPick[]
+  } catch {
+    return []
   }
 }

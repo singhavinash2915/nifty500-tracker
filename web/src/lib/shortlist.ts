@@ -1,4 +1,4 @@
-import type { ScreenerRow } from '../types'
+import type { MonthlyPick, ScreenerRow } from '../types'
 import type { PortfolioSettings, PositionView } from './load'
 
 /**
@@ -195,6 +195,22 @@ export function capacity(held: PositionView[], settings: PortfolioSettings | nul
 }
 
 
+/**
+ * Shares of a locked pick at today's price, under the limits saved with it.
+ *
+ * The pick and its stop are fixed for the month; the price is not. Sizing at the
+ * locked close would quietly take more risk once the stock has risen towards you,
+ * and a close under the stop means the case for buying has already failed.
+ */
+export function sizePick(pick: MonthlyPick, close: number) {
+  const perShare = close - pick.stop
+  if (perShare <= 0) return { close, shares: 0, cost: 0, risk: 0, belowStop: true }
+  const shares = pick.position_budget === null || pick.risk_budget === null
+    ? 0
+    : Math.floor(Math.min(pick.risk_budget / perShare, pick.position_budget / close))
+  return { close, shares, cost: shares * close, risk: shares * perShare, belowStop: false }
+}
+
 export interface BasketEffect {
   count: number
   cost: number
@@ -225,7 +241,7 @@ export interface BasketEffect {
 export const RISK_BUDGET = 0.06
 
 export function basketEffect(
-  chosen: Candidate[],
+  chosen: (Pick<Candidate, 'cost' | 'risk'> & { row: Pick<ScreenerRow, 'sector'> })[],
   held: PositionView[],
   settings: PortfolioSettings | null,
 ): BasketEffect | null {

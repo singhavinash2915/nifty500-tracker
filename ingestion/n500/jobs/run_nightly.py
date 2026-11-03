@@ -56,7 +56,7 @@ class Step:
 # and the screen would go stale behind a run reporting success; verify's
 # freshness check is what catches that, and it costs about a megabyte.
 RECOMPUTE = ("technicals", "fundamental_scores", "zones", "backdrop", "scores",
-             "positions", "alerts", "prune")
+             "picks", "positions", "alerts", "prune")
 
 
 def is_idle(prices_before: int | None, prices_after: int | None,
@@ -107,6 +107,7 @@ def plan(days: int, *, dry_run: bool, skip_fundamentals: bool) -> list[Step]:
         Step("zones", "compute_zones", common, needs=("prices",)),
         Step("backdrop", "compute_backdrop", common, needs=("prices",)),
         Step("scores", "compute_scores", common, needs=("technicals", "zones")),
+        Step("picks", "compute_monthly_picks", common, needs=("scores",)),
         # No export_snapshot here. It wrote fallback files into the running
         # machine's web/public, which the site never deploys (it builds from
         # git), and read 22MB a night from Supabase to do it: two thirds of the

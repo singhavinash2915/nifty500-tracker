@@ -53,6 +53,7 @@ PAGE_ORDER = {
     "backtest_trades": ("id",),
     "live_quotes": ("name",),
     "market_backdrop": ("date",),
+    "monthly_picks": ("month", "rank"),
     "portfolio": ("id",),
     "owners": ("email",),
 }

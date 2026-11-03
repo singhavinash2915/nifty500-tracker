@@ -196,3 +196,19 @@ export interface MarketBackdrop {
   hist_episodes: number | null
   study: string | null
 }
+
+/** One of the month's picks, locked on its first scored session. */
+export interface MonthlyPick {
+  month: string
+  rank: number
+  symbol: string
+  sector: string | null
+  as_of: string
+  conviction: number
+  close: number
+  stop: number
+  stop_basis: string | null
+  target: number | null
+  position_budget: number | null
+  risk_budget: number | null
+}
