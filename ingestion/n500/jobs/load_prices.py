@@ -77,8 +77,9 @@ def needs_backfill(
     return out
 
 
-def collect(client, days: int, symbols: set[str], log, *, pause: float):
-    """Every bar for `symbols` over `days`, adjusted. One file per session.
+def collect(client, days: int, symbols: set[str], log, *, pause: float,
+            end: date | None = None):
+    """Every bar for `symbols` over `days` up to `end`, adjusted. One file per session.
 
     Returns (rows, sessions, holidays, actions, symbols_seen). Files are cached
     on disk forever, so a long backfill over days already fetched costs no
@@ -86,7 +87,7 @@ def collect(client, days: int, symbols: set[str], log, *, pause: float):
     """
     per_symbol: dict[str, list[Quote]] = defaultdict(list)
     sessions = missing = 0
-    for day in trading_day_candidates(days):
+    for day in trading_day_candidates(days, end=end):
         cached = bhavcopy._cache_path(day).exists()
         try:
             quotes = bhavcopy.fetch(client, day)
@@ -162,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         # a hand-picked --symbols run, which is already a backfill, nor a dry
         # run, whose prices are fixtures.
         backfilled: set[str] = set()
-        if not args.symbols and not db.dry_run:
+        if not args.symbols and not db.dry_run and rows:
             pricecache.sync(db)
             stats = pricecache.bar_stats()
             thin = needs_backfill(stats, active, today=date.today(),
@@ -172,8 +173,13 @@ def main(argv: list[str] | None = None) -> int:
                 # measured over the same span as the rest of the index.
                 oldest = min((f for _, f in stats.values()), default=date.today())
                 depth = max((date.today() - oldest).days, args.days)
+                # No further than the sessions just loaded for everyone. On 3
+                # November the main load's fetch of the day failed and this
+                # one's succeeded, so one stock had a bar for a session no other
+                # stock had, and the backdrop reported 0% breadth from it.
+                last = date.fromisoformat(max(str(r["date"]) for r in rows))
                 more, _, _, more_actions, backfilled = collect(
-                    client, depth, thin, log, pause=args.pause)
+                    client, depth, thin, log, pause=args.pause, end=last)
                 log.rows_written += db.upsert("prices_daily", more, on_conflict="symbol,date")
                 # Mirror them too, or the next sync rebuilds it from scratch.
                 pricecache.add(more)

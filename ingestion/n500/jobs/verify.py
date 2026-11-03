@@ -51,6 +51,10 @@ JOB = "verify"
 # pipeline has stopped and nobody noticed.
 MAX_STALE_DAYS = 5
 
+# A session with fewer stocks than this share of the usual count is a partial
+# load, not a market event.
+MIN_SESSION_COVERAGE = 0.5
+
 # The Nifty 500 is 500 by construction, minus whatever has no price history yet.
 MIN_SCORED = 450
 MAX_SCORED = 520
@@ -270,6 +274,21 @@ def check_positions(db: Db) -> list[Check]:
     ]
 
 
+def session_is_complete(per_session: pd.Series) -> Check:
+    """The latest session has about as many stocks as the ones before it.
+
+    "Prices are fresh" looks only at the newest date, and on 3 November 2026
+    that date held one stock out of 737: fresh by that test, and enough to put
+    0% breadth on the dashboard. `per_session` is rows per date, oldest first.
+    """
+    latest = int(per_session.iloc[-1])
+    if len(per_session) < 2:
+        return Check("latest session is complete", True, f"{latest} stocks, nothing to compare")
+    usual = float(per_session.iloc[:-1].median())
+    return Check("latest session is complete", latest >= usual * MIN_SESSION_COVERAGE,
+                 f"{latest} stocks on {per_session.index[-1]}, usually {usual:.0f}")
+
+
 def check_prices(db: Db) -> list[Check]:
     prices = pd.DataFrame(
         db.select(
@@ -284,10 +303,12 @@ def check_prices(db: Db) -> list[Check]:
     latest = pd.to_datetime(prices["date"]).max().date()
     stale = (date.today() - latest).days
     closes = pd.to_numeric(prices["adj_close"], errors="coerce")
+    per_session = prices.groupby(pd.to_datetime(prices["date"]).dt.date).size().sort_index()
 
     return [
         Check("prices are fresh", stale <= MAX_STALE_DAYS,
               f"latest bar is {latest}, {stale} days old"),
+        session_is_complete(per_session),
         Check("no non-positive prices", (closes.dropna() > 0).all(),
               f"{int((closes.dropna() <= 0).sum())} rows at or below zero"),
     ]

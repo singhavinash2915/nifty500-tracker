@@ -278,3 +278,22 @@ class TestEventMemory:
         import pandas as pd
         from n500.scoring import conviction
         assert conviction.carry_events(pd.DataFrame()).empty
+
+
+class TestSessionCompleteness:
+    @staticmethod
+    def check(*counts):
+        import pandas as pd
+        from n500.jobs.verify import session_is_complete
+        return session_is_complete(pd.Series(counts, index=range(len(counts))))
+
+    def test_one_stock_in_the_latest_session_fails_the_run(self):
+        # 3 November 2026: fresh by date, one stock of 737, 0% breadth.
+        result = self.check(737, 736, 737, 1)
+        assert not result.ok and result.fatal
+
+    def test_a_normal_session_passes(self):
+        assert self.check(737, 736, 737, 735).ok
+
+    def test_a_first_session_has_nothing_to_compare(self):
+        assert self.check(737).ok

@@ -76,3 +76,50 @@ def test_the_mirror_overlap_covers_the_nightly_window():
     """At 7 days, the 10-day rows of a newly joined company fell outside the
     overlap, the counts disagreed, and the whole mirror was rebuilt."""
     assert pricecache.OVERLAP_DAYS > WINDOW
+
+
+def test_a_backfill_cannot_create_a_session_the_main_load_did_not_get(monkeypatch, tmp_path):
+    """3 November 2026: the main load's fetch of the day failed, the backfill's
+    succeeded, and one stock had a bar for a session no other stock had."""
+    import httpx
+    from n500.jobs import load_prices as lp
+    from n500.sources.bhavcopy import Quote
+
+    today = date.today()
+    attempts = {"today": 0}
+
+    def fetch(client, day):
+        if day == today:
+            attempts["today"] += 1
+            if attempts["today"] == 1:
+                raise httpx.ConnectError("reset")
+        return {s: Quote(s, day, 100, 101, 99, 100, 100, 1000, "INE000A01001")
+                for s in ("OLD", "NEW")}
+
+    written = []
+
+    class FakeDb:
+        dry_run = False
+        bytes_read = 0
+        def select(self, table, columns="*", **kw):
+            return [{"symbol": "OLD", "is_active": True}, {"symbol": "NEW", "is_active": True}]
+        def upsert(self, table, rows, **kw):
+            written.extend(rows)
+            return len(rows)
+        def start_run(self, job): return None
+        def finish_run(self, *a, **k): pass
+
+    monkeypatch.setattr(lp, "Db", lambda **kw: FakeDb())
+    monkeypatch.setattr(lp.bhavcopy, "make_client", lambda: None)
+    monkeypatch.setattr(lp.bhavcopy, "fetch", fetch)
+    monkeypatch.setattr(lp.bhavcopy, "_cache_path", lambda day: tmp_path / "missing")
+    monkeypatch.setattr(lp.time, "sleep", lambda s: None)
+    monkeypatch.setattr(lp.pricecache, "sync", lambda db, **k: 0)
+    monkeypatch.setattr(lp.pricecache, "add", lambda rows: len(rows))
+    monkeypatch.setattr(lp.pricecache, "bar_stats",
+                        lambda: {"OLD": (1000, today - timedelta(days=30))})
+
+    assert lp.main(["--days", "3", "--pause", "0"]) == 0
+    assert attempts["today"] == 1, "the backfill must not ask for a day past the main load"
+    assert all(r["date"] != today.isoformat() for r in written)
+    assert any(r["symbol"] == "NEW" for r in written), "the backfill itself still ran"
