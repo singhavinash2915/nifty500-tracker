@@ -42,7 +42,9 @@ anyway, which a manual run after a code change needs.
 `scoring/picks.py`); a locked month is never rewritten. They show on the Buy list page.
 launchd fires `scripts/nightly.sh` at 19:15, 20:30, 22:00 and 23:30, and once a run
 started from 19:00 succeeds the later slots exit at once. A price file that could
-not be fetched exits 75 (incomplete), which only notifies from the 23:30 slot. To
+not be fetched exits 75 (incomplete), which only notifies from the 23:30 slot. A
+weekday with no file yet exits 76 (pending): never notifies, and only the 23:30
+slot finishes the day, treating it as a holiday. To
 change the slots, edit the plist and reinstall it in `~/Library/LaunchAgents`.
 Every job records the bytes it read in `ingestion_runs.bytes_read`; `verify`
 fails the run once the month passes the pipeline's 1GB egress budget.

@@ -56,6 +56,17 @@ def failed_days() -> list[str]:
     return sorted(_failed_days)
 
 
+# Today is a weekday and its file is not there yet. That is a market holiday or
+# NSE publishing late, and nothing tonight can tell which. Recorded so the
+# nightly does not count the day as done: a run that found no file at 19:15 and
+# finished the day would have left a late file for tomorrow, with no warning.
+_today_pending = False
+
+
+def today_pending() -> bool:
+    return _today_pending
+
+
 def needs_backfill(
     stats: dict[str, tuple[int, date]],
     active: set[str],
@@ -105,6 +116,9 @@ def collect(client, days: int, symbols: set[str], log, *, pause: float,
             quotes = bhavcopy.fetch(client, day)
         except BhavcopyUnavailable:
             missing += 1
+            if day == date.today() and day.weekday() < 5:
+                global _today_pending
+                _today_pending = True
             continue
         except (BhavcopyError, httpx.HTTPError) as exc:
             log.error(day.isoformat(), str(exc))
@@ -139,7 +153,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    global _today_pending
     _failed_days.clear()
+    _today_pending = False
     db = Db(force_dry_run=args.dry_run)
 
     if args.symbols:

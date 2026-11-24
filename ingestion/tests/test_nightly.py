@@ -217,3 +217,45 @@ def test_a_real_failure_outranks_an_incomplete_run(monkeypatch):
     monkeypatch.setattr(run_nightly, "run_step", lambda step: ("failed", "boom") if step.name == "verify" else ("ok", None))
     monkeypatch.setattr(run_nightly, "_record", lambda *a, **k: None)
     assert run_nightly.main(["--skip-fundamentals"]) == 1
+
+
+def test_a_weekday_with_no_file_yet_is_pending_not_done(monkeypatch):
+    # A run at 19:15 that found no file would have finished the day, and a late
+    # publish would have waited until tomorrow.
+    from n500.jobs import load_prices
+    monkeypatch.setattr(load_prices, "_today_pending", True)
+    code, ran = run_with(monkeypatch, [796_814, 796_814])
+    assert code == run_nightly.EXIT_PENDING
+
+
+def test_a_failed_fetch_outranks_pending(monkeypatch):
+    from n500.jobs import load_prices
+    monkeypatch.setattr(load_prices, "_today_pending", True)
+    monkeypatch.setattr(load_prices, "_failed_days", {"2026-11-23"})
+    code, _ = run_with(monkeypatch, [796_814, 796_814])
+    assert code == run_nightly.EXIT_INCOMPLETE
+
+
+def test_only_todays_weekday_miss_is_pending(monkeypatch, tmp_path):
+    """A 404 for a past day, or for a Saturday, is an answer, not a wait."""
+    from datetime import date, timedelta
+    from n500.jobs import load_prices as lp
+    from n500.sources.bhavcopy import BhavcopyUnavailable
+
+    def collect_with_miss_on(miss):
+        def fetch(client, day):
+            if day == miss:
+                raise BhavcopyUnavailable("404")
+            return {}
+        monkeypatch.setattr(lp.bhavcopy, "fetch", fetch)
+        monkeypatch.setattr(lp.bhavcopy, "_cache_path", lambda d: tmp_path / "x")
+        monkeypatch.setattr(lp.time, "sleep", lambda s: None)
+        monkeypatch.setattr(lp, "_today_pending", False)
+        class Log:
+            def error(self, *a): pass
+        lp.collect(None, 3, set(), Log(), pause=0)
+        return lp.today_pending()
+
+    today = date.today()
+    assert collect_with_miss_on(today) == (today.weekday() < 5)
+    assert collect_with_miss_on(today - timedelta(days=1)) is False

@@ -81,10 +81,17 @@ if [ "$STATUS" -eq 0 ] && [ "$HOUR" -ge 19 ]; then
   echo "$TODAY" > "$DONE_MARKER"
 fi
 
+# 76 is run_nightly's EXIT_PENDING: a weekday with no price file yet. Usually a
+# holiday, sometimes NSE late. The later slots try again, and if the last one of
+# the evening still finds nothing it was a holiday and the day is done.
+if [ "$STATUS" -eq 76 ] && [ "$HOUR" -ge 23 ]; then
+  echo "$TODAY" > "$DONE_MARKER"
+fi
+
 # 75 is run_nightly's EXIT_INCOMPLETE: it could not reach a price file. A later
 # slot will probably manage, so that is only worth interrupting anyone for once
 # the last slot of the evening has also failed. Anything else is a real fault.
-if [ "$STATUS" -ne 0 ] && { [ "$STATUS" -ne 75 ] || [ "$HOUR" -ge 23 ]; }; then
+if [ "$STATUS" -ne 0 ] && [ "$STATUS" -ne 76 ] && { [ "$STATUS" -ne 75 ] || [ "$HOUR" -ge 23 ]; }; then
   # The last line naming a step is the most useful thing to put in four inches
   # of notification — "FAILED universe" says more than "exit 1".
   DETAIL="$(grep -E 'FAILED|INCOMPLETE|check\(s\) failed' "$LOG" | tail -1 | cut -c1-120)"

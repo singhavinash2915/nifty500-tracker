@@ -94,3 +94,19 @@ def test_yesterdays_marker_does_not_stop_today(sandbox):
     run(sandbox, status=0, hour=19)
     assert runs(sandbox) == 1
     assert (sandbox / "data/logs/.nightly-done").read_text().strip() == date.today().isoformat()
+
+
+def test_pending_keeps_the_evening_open_and_stays_quiet(sandbox):
+    # 19:15 finds no file for a weekday: the later slots must still run.
+    assert run(sandbox, status=76, hour=19, line="[x] PENDING no price file") == 76
+    assert run(sandbox, status=0, hour=20) == 0
+    assert runs(sandbox) == 2
+    assert notified(sandbox) == ""
+
+
+def test_pending_at_the_last_slot_is_a_holiday_and_finishes_the_day(sandbox):
+    for hour in (19, 20, 22, 23):
+        run(sandbox, status=76, hour=hour, line="[x] PENDING no price file")
+    run(sandbox, status=76, hour=23)            # a slot after the last one
+    assert runs(sandbox) == 4
+    assert notified(sandbox) == ""

@@ -33,6 +33,11 @@ JOB = "run_nightly"
 # missing a session. nightly.sh tries again later rather than alarming at once.
 EXIT_INCOMPLETE = 75
 
+# The run worked, but today is a weekday with no price file yet: a holiday, or
+# NSE publishing late. Not a fault, so nothing notifies; nightly.sh just does
+# not count the day as done until its last slot has also found nothing.
+EXIT_PENDING = 76
+
 
 @dataclass
 class Step:
@@ -214,6 +219,10 @@ def main(argv: list[str] | None = None) -> int:
         # Worded for the grep in nightly.sh, which puts it in the notification.
         print(f"\n[{JOB}] INCOMPLETE could not fetch prices for {', '.join(missed)}")
         return EXIT_INCOMPLETE
+
+    if load_prices.today_pending():
+        print(f"\n[{JOB}] PENDING no price file for today yet: a holiday or a late publish")
+        return EXIT_PENDING
 
     if idle:
         print(f"\n[{JOB}] no new prices: recompute steps idle, verify ran")
